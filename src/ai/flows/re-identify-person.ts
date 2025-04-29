@@ -45,16 +45,17 @@ const findSnapshotsTool = ai.defineTool({
   inputSchema: z.object({
     videoDataUri: z.string().describe("A video of a scene, as a data URI that must include a MIME type and use Base64 encoding."),
     numSnapshots: z.number().describe('The number of snapshots to return.'),
+    videoDuration: z.number().describe('The duration of the video in seconds.'),
   }),
   outputSchema: z.array(SnapshotSchema).describe('A list of snapshots (data URIs) with timestamps where the person is visible in the video.'),
 }, async input => {
-  const {videoDataUri, numSnapshots} = input;
+  const {videoDataUri, numSnapshots, videoDuration} = input;
   // In a real application, this would use a computer vision model to find frames where the person is visible.
-  // For this example, we'll just return some dummy snapshots with dummy timestamps.
+  // For this example, we'll just return some dummy snapshots with dummy timestamps, ensuring they are within videoDuration.
   const snapshots: SnapshotSchema[] = [];
   for (let i = 0; i < numSnapshots; i++) {
-    // Generate a dummy timestamp (0 to 10 seconds).
-    const timestamp = Math.random() * 10;
+    // Generate a dummy timestamp (0 to videoDuration seconds).
+    const timestamp = Math.random() * videoDuration;
     snapshots.push({
       timestamp: timestamp,
       dataUri: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`,
@@ -79,6 +80,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
         .describe(
           "A video of a scene, as a data URI that must include a MIME type and use Base64 encoding. Expected format: 'data:<mimetype>;base64,<encoded_data>'."
         ),
+      videoDuration: z.number().describe('The duration of the video in seconds.'),
     }),
   },
   output: {
@@ -89,18 +91,20 @@ const reIdentifyPersonPrompt = ai.definePrompt({
     }),
   },
   prompt: `You are an expert in person re-identification. Given a photo of a person and a video, determine if the person in the photo is present in the video.
+  
+  The video is {{videoDuration}} seconds long.
 
   Photo: {{media url=photoDataUri}}
   Video: {{media url=videoDataUri}}
 
   Respond with whether the person is present in the video, a confidence score if available, and the reason for your determination.
 
-  If the person is present in the video, do NOT use the findSnapshots tool.  The tool will be called separately.`,
+  If the person is present in the video, use the findSnapshots tool to find the timestamps where the person is visible.`,
 });
 
-async function getSnapshots(videoDataUri: string): Promise<SnapshotSchema[]> {
+async function getSnapshots(videoDataUri: string, videoDuration: number): Promise<SnapshotSchema[]> {
   try {
-    const snapshots = await findSnapshotsTool({videoDataUri, numSnapshots: 3});
+    const snapshots = await findSnapshotsTool({videoDataUri, numSnapshots: 3, videoDuration});
     return snapshots;
   } catch (error) {
     console.error('Error finding snapshots:', error);
@@ -118,11 +122,14 @@ const reIdentifyPersonFlow = ai.defineFlow<
     outputSchema: ReIdentifyPersonOutputSchema,
   },
   async input => {
-    const {output} = await reIdentifyPersonPrompt(input);
+    // Extract video duration from the video data URI.  This is a dummy value.  A real implementation would need to parse the video data.
+    const videoDuration = 5;
+
+    const {output} = await reIdentifyPersonPrompt({...input, videoDuration});
 
     let snapshots: SnapshotSchema[] | undefined = undefined;
     if (output?.isPresent) {
-      snapshots = await getSnapshots(input.videoDataUri);
+      snapshots = await getSnapshots(input.videoDataUri, videoDuration);
     }
 
     return {...output, snapshots};
