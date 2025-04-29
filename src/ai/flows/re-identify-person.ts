@@ -100,7 +100,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
 
   Respond with whether the person is present in the video, a confidence score if available, and the reason for your determination.
 
-  If the person is present in the video, use the findSnapshots tool to find the timestamps where the person is visible.`,
+  If the person is present in the video, use the findSnapshots tool to find the timestamps where the person is visible. Specifically, return a list of timestamps and a brief explanation of where the person is visible. The snapshots show when and where the person is present in the video.`,
 });
 
 async function getSnapshots(videoDataUri: string, videoDuration: number): Promise<SnapshotSchema[]> {
