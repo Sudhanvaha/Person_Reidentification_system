@@ -16,21 +16,25 @@ export default function Home() {
   const [loading, setLoading] = useState<boolean>(false);
 
   const onDropPhoto = useCallback((acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPhotoDataUri(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    if (acceptedFiles.length > 0) {
+      const file = acceptedFiles[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        setPhotoDataUri(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   }, []);
 
   const onDropVideo = useCallback((acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    const reader = new FileReader();
-    reader.onload = () => {
-      setVideoDataUri(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    if (acceptedFiles.length > 0) {
+      const file = acceptedFiles[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        setVideoDataUri(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   }, []);
 
   const { getRootProps: getPhotoRootProps, getInputProps: getPhotoInputProps } = useDropzone({
