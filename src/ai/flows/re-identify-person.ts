@@ -55,7 +55,9 @@ const findSnapshotsTool = ai.defineTool({
   const snapshots: SnapshotSchema[] = [];
   for (let i = 0; i < numSnapshots; i++) {
     // Generate a dummy timestamp (0 to videoDuration seconds).
-    const timestamp = Math.random() * videoDuration;
+    // Ensure timestamp is within videoDuration.
+    const timestamp = Math.min(Math.random() * videoDuration, videoDuration);
+    console.log(`Generated timestamp: ${timestamp}, videoDuration: ${videoDuration}`); // Diagnostic log
     snapshots.push({
       timestamp: timestamp,
       dataUri: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`,
