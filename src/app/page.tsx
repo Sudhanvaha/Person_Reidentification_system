@@ -142,9 +142,9 @@ export default function Home() {
                   {result.snapshotDataUris && result.snapshotDataUris.length > 0 && (
                     <div className="mt-4">
                       <p className="font-bold">Snapshots:</p>
-                      <div className="flex flex-row space-x-2">
+                      <div className="grid grid-cols-3 gap-2">
                         {result.snapshotDataUris.map((snapshot, index) => (
-                          <img key={index} src={snapshot} alt={`Snapshot ${index + 1}`} className="max-h-20 rounded-md" />
+                          <img key={index} src={snapshot} alt={`Snapshot ${index + 1}`} className="max-h-40 rounded-md" />
                         ))}
                       </div>
                     </div>
