@@ -1,4 +1,3 @@
-// re-identify-person.ts
 'use server';
 /**
  * @fileOverview A person re-identification AI agent.
@@ -29,15 +28,35 @@ const ReIdentifyPersonOutputSchema = z.object({
   isPresent: z.boolean().describe('Whether the person in the photo is present in the video.'),
   confidence: z.number().optional().describe('The confidence score of the re-identification, if available.'),
   reason: z.string().describe('The reason for the determination.'),
+  snapshotDataUris: z.array(z.string()).optional().describe('Snapshots (data URIs) where the person is visible in the video, if present.'),
 });
 export type ReIdentifyPersonOutput = z.infer<typeof ReIdentifyPersonOutputSchema>;
 
-export async function reIdentifyPerson(input: ReIdentifyPersonInput): Promise<ReIdentifyPersonOutput> {
-  return reIdentifyPersonFlow(input);
-}
+// Dummy tool to simulate finding snapshots in the video.  In a real application, this would use
+// a computer vision model to find frames where the person is visible.
+const findSnapshotsTool = ai.defineTool({
+  name: 'findSnapshots',
+  description: 'Finds snapshots in the video where the person in the photo is visible.',
+  inputSchema: z.object({
+    videoDataUri: z.string().describe("A video of a scene, as a data URI that must include a MIME type and use Base64 encoding."),
+    numSnapshots: z.number().describe('The number of snapshots to return.'),
+  }),
+  outputSchema: z.array(z.string()).describe('A list of snapshots (data URIs) where the person is visible in the video.'),
+}, async input => {
+  const {videoDataUri, numSnapshots} = input;
+  // In a real application, this would use a computer vision model to find frames where the person is visible.
+  // For this example, we'll just return some dummy snapshots.
+  const snapshots: string[] = [];
+  for (let i = 0; i < numSnapshots; i++) {
+    snapshots.push(`data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`);
+  }
+  return snapshots;
+});
+
 
 const reIdentifyPersonPrompt = ai.definePrompt({
   name: 'reIdentifyPersonPrompt',
+  tools: [findSnapshotsTool],
   input: {
     schema: z.object({
       photoDataUri: z
@@ -57,6 +76,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
       isPresent: z.boolean().describe('Whether the person in the photo is present in the video.'),
       confidence: z.number().optional().describe('The confidence score of the re-identification, if available.'),
       reason: z.string().describe('The reason for the determination.'),
+      snapshotDataUris: z.array(z.string()).optional().describe('Snapshots (data URIs) where the person is visible in the video, if present.'),
     }),
   },
   prompt: `You are an expert in person re-identification. Given a photo of a person and a video, determine if the person in the photo is present in the video.
@@ -64,8 +84,20 @@ const reIdentifyPersonPrompt = ai.definePrompt({
   Photo: {{media url=photoDataUri}}
   Video: {{media url=videoDataUri}}
 
-  Respond with whether the person is present in the video, a confidence score if available, and the reason for your determination.`,
+  Respond with whether the person is present in the video, a confidence score if available, and the reason for your determination.
+
+  If the person is present in the video, use the findSnapshots tool to find up to 3 snapshots where the person is visible.`,
 });
+
+async function getSnapshots(videoDataUri: string): Promise<string[]> {
+  try {
+    const snapshots = await findSnapshotsTool({videoDataUri, numSnapshots: 3});
+    return snapshots;
+  } catch (error) {
+    console.error('Error finding snapshots:', error);
+    return [];
+  }
+}
 
 const reIdentifyPersonFlow = ai.defineFlow<
   typeof ReIdentifyPersonInputSchema,
@@ -78,6 +110,16 @@ const reIdentifyPersonFlow = ai.defineFlow<
   },
   async input => {
     const {output} = await reIdentifyPersonPrompt(input);
+
+    if (output?.isPresent) {
+      const snapshotDataUris = await getSnapshots(input.videoDataUri);
+      return {...output, snapshotDataUris};
+    }
+
     return output!;
   }
 );
+
+export async function reIdentifyPerson(input: ReIdentifyPersonInput): Promise<ReIdentifyPersonOutput> {
+  return reIdentifyPersonFlow(input);
+}

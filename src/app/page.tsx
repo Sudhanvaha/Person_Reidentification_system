@@ -139,6 +139,16 @@ export default function Home() {
                     The person in the image is present in the video. Reason: {result.reason}
                     {result.confidence && <>, Confidence: {result.confidence}</>}
                   </AlertDescription>
+                  {result.snapshotDataUris && result.snapshotDataUris.length > 0 && (
+                    <div className="mt-4">
+                      <p className="font-bold">Snapshots:</p>
+                      <div className="flex flex-row space-x-2">
+                        {result.snapshotDataUris.map((snapshot, index) => (
+                          <img key={index} src={snapshot} alt={`Snapshot ${index + 1}`} className="max-h-20 rounded-md" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
