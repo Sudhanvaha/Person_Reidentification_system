@@ -8,7 +8,7 @@ import { reIdentifyPerson } from "@/ai/flows/re-identify-person";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera } from "lucide-react"; // Added Camera icon
+import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film } from "lucide-react"; // Added Film icon
 import Image from "next/image";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
@@ -145,11 +145,19 @@ export default function Home() {
               return;
           }
 
+          // Flag to ensure resolve is called only once
+          let resolved = false;
+
           const seekEventHandler = () => {
+              if (resolved) return; // Prevent multiple resolves
+
               // Ensure video dimensions are set before drawing
               if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
                   canvas.width = videoElement.videoWidth;
                   canvas.height = videoElement.videoHeight;
+                  // Draw black background first to handle potential alpha channels in video
+                  context.fillStyle = 'black';
+                  context.fillRect(0, 0, canvas.width, canvas.height);
                   context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
                   try {
                       // Try JPEG first (more common, smaller size)
@@ -159,51 +167,82 @@ export default function Home() {
                           console.warn("Falling back to PNG for snapshot");
                           dataUri = canvas.toDataURL('image/png');
                       }
-                       resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                       if (!resolved) {
+                           resolved = true;
+                           resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                       }
                   } catch (e) {
                        console.error("Error generating data URL from canvas:", e);
-                       resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                       if (!resolved) {
+                            resolved = true;
+                            resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                       }
                   }
               } else {
-                  console.warn("Video dimensions not available yet for drawing frame.");
+                  console.warn("Video dimensions not available yet for drawing frame at", timestamp);
                    // Retry drawing after a short delay if dimensions are not ready
                    setTimeout(() => {
+                       if (resolved) return;
                        if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
                             canvas.width = videoElement.videoWidth;
                             canvas.height = videoElement.videoHeight;
+                            context.fillStyle = 'black';
+                            context.fillRect(0, 0, canvas.width, canvas.height);
                             context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
                             try {
                                 let dataUri = canvas.toDataURL('image/jpeg', 0.8);
                                 if (!dataUri || dataUri === 'data:,') dataUri = canvas.toDataURL('image/png');
-                                resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                                if (!resolved) {
+                                    resolved = true;
+                                    resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                                }
                             } catch (e) {
                                  console.error("Error generating data URL from canvas (retry):", e);
-                                 resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                                 if (!resolved) {
+                                     resolved = true;
+                                     resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                                 }
                             }
                        } else {
-                            console.error("Video dimensions still not available after delay.");
-                            resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                            console.error("Video dimensions still not available after delay for timestamp", timestamp);
+                            if (!resolved) {
+                                resolved = true;
+                                resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                            }
                        }
-                   }, 100); // Wait 100ms and try again
+                   }, 150); // Wait 150ms and try again
               }
 
               // Clean up the event listener *after* processing
-              videoElement.removeEventListener('seeked', seekEventHandler);
+              // No need to remove if { once: true } is used
+              // videoElement.removeEventListener('seeked', seekEventHandler);
+          };
+
+          const errorHandler = (event: Event) => {
+              if (resolved) return;
+              console.error(`Video seeking error for timestamp ${timestamp}:`, event);
+              resolved = true;
+              resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
           };
 
           // Add listener *before* setting currentTime
+          // Use 'seeked' for success, 'error' for potential issues during seek
           videoElement.addEventListener('seeked', seekEventHandler, { once: true });
+          videoElement.addEventListener('error', errorHandler, { once: true });
+
 
           // Set the time. The 'seeked' event will fire when ready.
           videoElement.currentTime = timestamp;
 
-          // Timeout fallback in case 'seeked' event doesn't fire (e.g., invalid timestamp)
+          // Timeout fallback in case 'seeked' event doesn't fire (e.g., invalid timestamp, browser issues)
           setTimeout(() => {
+               if (resolved) return; // Already resolved by seeked or error handler
                videoElement.removeEventListener('seeked', seekEventHandler);
-               // Check if resolved already by the event handler
+               videoElement.removeEventListener('error', errorHandler);
+               resolved = true;
                resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' }); // Resolve with failure if timeout reached
-               console.warn(`Timeout waiting for seeked event for timestamp ${timestamp}`);
-           }, 2000); // 2 second timeout for seeking
+               console.warn(`Timeout waiting for seeked/error event for timestamp ${timestamp}`);
+           }, 3000); // 3 second timeout for seeking
 
       });
   };
@@ -212,7 +251,7 @@ export default function Home() {
         if (!videoRef.current || timestamps.length === 0) {
             return [];
         }
-        setLoadingMessage("Extracting snapshots...");
+        setLoadingMessage(`Extracting ${timestamps.length} snapshot${timestamps.length > 1 ? 's' : ''}...`);
         setExtractionProgress(0);
         const videoElement = videoRef.current;
         const snapshots: Snapshot[] = [];
@@ -221,21 +260,69 @@ export default function Home() {
         // Mute video to prevent audio playback during seeking
         const originalMuted = videoElement.muted;
         videoElement.muted = true;
+        // Ensure playback doesn't start if paused
+        const originalPaused = videoElement.paused;
+        if (!originalPaused) videoElement.pause();
+
 
         // Ensure video metadata is loaded before seeking
-        if (videoElement.readyState < 1) { // HAVE_NOTHING or HAVE_METADATA
-           await new Promise<void>(resolve => {
+        if (videoElement.readyState < videoElement.HAVE_METADATA) { // HAVE_METADATA = 1
+           console.log("Waiting for video metadata...");
+           await new Promise<void>((resolve, reject) => {
                const loadedMetaHandler = () => {
                    videoElement.removeEventListener('loadedmetadata', loadedMetaHandler);
+                   videoElement.removeEventListener('error', errorHandler);
+                   console.log("Video metadata loaded.");
                    resolve();
                };
+                const errorHandler = (e: Event) => {
+                   videoElement.removeEventListener('loadedmetadata', loadedMetaHandler);
+                   videoElement.removeEventListener('error', errorHandler);
+                   console.error("Error loading video metadata:", e);
+                   reject(new Error("Failed to load video metadata"));
+               };
+
                videoElement.addEventListener('loadedmetadata', loadedMetaHandler, { once: true });
-                // Add timeout for metadata loading
+               videoElement.addEventListener('error', errorHandler, { once: true });
+
+               // Timeout for metadata loading
                setTimeout(() => {
                    videoElement.removeEventListener('loadedmetadata', loadedMetaHandler);
-                   console.warn("Timeout waiting for video metadata.");
+                   videoElement.removeEventListener('error', errorHandler);
+                   if (videoElement.readyState < videoElement.HAVE_METADATA) {
+                       console.warn("Timeout waiting for video metadata.");
+                       reject(new Error("Timeout waiting for video metadata"));
+                   } else {
+                       resolve(); // Metadata might have loaded just before timeout check
+                   }
+               }, 5000); // 5 second timeout
+           }).catch(err => {
+               console.error("Snapshot extraction aborted due to metadata error:", err);
+               // Restore original state
+               videoElement.muted = originalMuted;
+               if (!originalPaused) videoElement.play();
+               setLoadingMessage("Analysis Failed");
+               setExtractionProgress(0);
+               toast({ variant: "destructive", title: "Snapshot Error", description: "Could not load video metadata for extraction." });
+               return []; // Return empty array if metadata fails
+           });
+        }
+
+        // Ensure video is seekable (readyState > HAVE_CURRENT_DATA usually means it is)
+        if (videoElement.readyState < videoElement.HAVE_CURRENT_DATA) { // HAVE_CURRENT_DATA = 2
+           console.log("Video not seekable yet, waiting...");
+            await new Promise<void>(resolve => {
+               const canPlayHandler = () => {
+                   videoElement.removeEventListener('canplay', canPlayHandler);
+                   console.log("Video is now seekable.");
+                   resolve();
+               };
+               videoElement.addEventListener('canplay', canPlayHandler, { once: true });
+                setTimeout(() => {
+                   videoElement.removeEventListener('canplay', canPlayHandler);
+                   console.warn("Timeout waiting for video to become seekable.");
                    resolve(); // Proceed anyway, might fail later
-               }, 3000); // 3 second timeout
+               }, 5000); // 5 second timeout
            });
         }
 
@@ -244,6 +331,8 @@ export default function Home() {
             const timestamp = timestamps[i];
              console.log(`[Snapshot Extraction] Attempting frame at ${timestamp.toFixed(2)}s`);
             try {
+                 // Small delay between seeks can sometimes help browser stability
+                 // await new Promise(resolve => setTimeout(resolve, 50));
                 const snapshot = await extractFrame(videoElement, timestamp);
                 snapshots.push(snapshot);
                 console.log(`[Snapshot Extraction] ${snapshot.generationStatus === 'extracted' ? 'Success' : 'Failed'} for ${timestamp.toFixed(2)}s. URI Length: ${snapshot.dataUri.length}`);
@@ -255,9 +344,13 @@ export default function Home() {
              setExtractionProgress(((i + 1) / totalSteps) * 100);
         }
 
-        // Restore original muted state
+        // Restore original state
         videoElement.muted = originalMuted;
+        if (!originalPaused) videoElement.play(); // Resume playback if it was playing
+
         setExtractionProgress(0); // Reset progress
+        setLoadingMessage("Analysis Complete"); // Update message after extraction
+        console.log(`[Snapshot Extraction] Finished. Extracted ${snapshots.filter(s => s.generationStatus === 'extracted').length} of ${timestamps.length} frames.`);
         return snapshots;
     };
 
@@ -272,7 +365,8 @@ export default function Home() {
     // Video file size check (client-side)
      if (videoFile.size > 100 * 1024 * 1024) { // 100MB limit check
          setError("Video file is too large (> 100MB). Processing might fail or be very slow.");
-         toast({ variant: "destructive", title: "File Too Large", description: "Video size is very large. Consider using a shorter clip." });
+         toast({ variant: "warning", title: "File Too Large", description: "Video size is large (>100MB). Analysis might take longer or fail." });
+         // Don't return, let the backend handle if it can, but warn the user.
      }
 
     setLoading(true);
@@ -289,8 +383,10 @@ export default function Home() {
 
       let finalResult: ReIdentifyPersonOutputWithSnapshots = { ...llmResult, snapshots: [] }; // Initialize with empty snapshots
 
-      if (llmResult.isPresent && llmResult.timestamps && llmResult.timestamps.length > 0) {
-        toast({ variant: "default", title: "Person Identified", description: "Extracting snapshot frames..." });
+      // Extract snapshots IF timestamps are available, regardless of isPresent status
+      // This allows showing potential matches even if the final confidence is low.
+      if (llmResult.timestamps && llmResult.timestamps.length > 0) {
+        toast({ variant: "default", title: "Analysis Complete", description: "Extracting potential snapshot frames..." });
         // Extract snapshots client-side based on timestamps
         const extractedSnaps = await extractSnapshots(llmResult.timestamps);
         finalResult.snapshots = extractedSnaps; // Add extracted snapshots to the result
@@ -300,14 +396,18 @@ export default function Home() {
           if (successfulSnaps > 0) {
               toast({ variant: "success", title: "Snapshots Extracted", description: `${successfulSnaps} frame(s) successfully extracted.` });
           } else if (extractedSnaps.length > 0) {
-               toast({ variant: "warning", title: "Snapshot Extraction Issues", description: "Could not extract visual snapshots." });
+               toast({ variant: "warning", title: "Snapshot Extraction Issues", description: "Could not extract any visual snapshots." });
+          } else {
+              // This case should ideally not happen if llmResult.timestamps.length > 0,
+              // but handle it just in case extractSnapshots returns empty.
+              toast({ variant: "warning", title: "Snapshots", description: "No snapshots could be processed." });
           }
 
       } else if (llmResult.isPresent) {
           // Person identified, but LLM provided no timestamps
           toast({ variant: "default", title: "Person Identified", description: "Location timestamps not provided by analysis." });
       } else {
-          // Person not identified
+          // Person not identified and no timestamps
           toast({ variant: "default", title: "Person Not Identified", description: llmResult.reason || "The person was not found in the video." });
       }
 
@@ -316,7 +416,6 @@ export default function Home() {
             toast({ variant: "destructive", title: "Processing Issue", description: llmResult.reason });
             setError(llmResult.reason);
         }
-
 
       setResult(finalResult);
 
@@ -336,15 +435,16 @@ export default function Home() {
 
   // Function to check if a data URI looks like a valid image and is not the placeholder
   const isValidAndNotPlaceholder = (uri: string | null | undefined): boolean => {
-    return !!uri && uri.startsWith('data:image/') && uri.length > 200 && uri !== placeholderDataUri; // Basic check + length + placeholder check
+    // Increased length check as placeholder is small but valid base64
+    return !!uri && uri.startsWith('data:image/') && uri.length > 300 && uri !== placeholderDataUri;
   };
 
   const getSnapshotBadgeVariant = (status?: Snapshot['generationStatus']): "success" | "destructive" | "secondary" | "warning" => {
       switch (status) {
-          case 'extracted': return 'success'; // Changed from default to success
-          case 'failed': return 'destructive'; // Red
-          case 'placeholder': return 'secondary'; // Gray
-          default: return 'warning'; // Use warning for unknown/undefined
+          case 'extracted': return 'success';
+          case 'failed': return 'destructive';
+          case 'placeholder': return 'secondary';
+          default: return 'warning';
       }
   }
    const getSnapshotStatusText = (status?: Snapshot['generationStatus']): string => {
@@ -366,9 +466,21 @@ export default function Home() {
 
         {/* Hidden Canvas for frame extraction */}
         <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
-        {/* Hidden Video element for frame extraction */}
-        {videoSrc && (
-           <video ref={videoRef} src={videoSrc} muted playsInline style={{ display: 'none' }} crossOrigin="anonymous"></video>
+        {/* Hidden Video element for frame extraction - Needs to be potentially visible for debugging */}
+         {videoSrc && (
+           <video
+              ref={videoRef}
+              src={videoSrc}
+              muted
+              playsInline
+              controls // Add controls for debugging seeking issues if needed
+              style={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '1px', height: '1px' }} // Keep offscreen but allow browser to load/process
+              // style={{ display: 'none' }} // Original - hide completely
+              crossOrigin="anonymous"
+              preload="auto" // Encourage browser to load metadata and some data
+              onLoadedMetadata={() => console.log("Debug: Video metadata loaded")}
+              onError={(e) => console.error("Debug: Video element error", e)}
+           ></video>
         )}
 
 
@@ -389,7 +501,7 @@ export default function Home() {
                  <label htmlFor="photo-upload" className="flex flex-col items-center justify-center text-center p-4 w-full h-full cursor-pointer z-10"> {/* Added cursor-pointer, z-index */}
                   {photoDataUri ? (
                      <div className="flex flex-col items-center">
-                       <Image src={photoDataUri} alt="Uploaded Person Preview" width={150} height={150} className="max-h-40 w-auto rounded-md object-contain border bg-white shadow-sm mb-2" />
+                       <Image src={photoDataUri} alt="Uploaded Person Preview" width={150} height={150} className="max-h-40 w-auto rounded-md object-contain border bg-white shadow-sm mb-2" data-ai-hint="person lookup photo"/>
                        <span className="text-xs text-muted-foreground mt-1">(Click or drag to replace)</span>
                     </div>
 
@@ -424,14 +536,14 @@ export default function Home() {
                  <label htmlFor="video-upload" className="flex flex-col items-center justify-center text-center p-4 w-full h-full cursor-pointer z-10">
                    {videoSrc ? ( // Check videoSrc for preview instead of videoDataUri
                      <div className="flex flex-col items-center">
-                      <Video className="h-10 w-10 text-primary mb-2" />
+                      <Film className="h-10 w-10 text-primary mb-2" /> {/* Changed icon */}
                       <span className="text-sm text-foreground font-medium">Video Selected</span>
                        {videoFile && <span className="text-xs text-muted-foreground/90 mt-1">{videoFile.name} ({(videoFile.size / (1024*1024)).toFixed(1)} MB)</span>}
                       <span className="text-xs text-muted-foreground mt-1">(Click or drag to replace)</span>
                     </div>
                   ) : (
                     <>
-                      <Video className="h-10 w-10 text-muted-foreground mb-2" />
+                      <Upload className="h-10 w-10 text-muted-foreground mb-2" /> {/* Changed icon back to Upload */}
                       <span className="text-sm text-muted-foreground">
                          {isVideoDragActive ? "Drop video here..." : "Click or drag video"}
                       </span>
@@ -478,12 +590,12 @@ export default function Home() {
               <CardTitle className="text-2xl text-center">Analysis Result</CardTitle>
             </CardHeader>
             <CardContent>
-              <Alert variant={result.isPresent ? "success" : "destructive"} className={`mb-6 border-l-4 ${result.isPresent ? 'border-green-500 bg-green-50/30 dark:bg-green-900/20' : 'border-destructive bg-destructive/10'}`}>
+              <Alert variant={result.isPresent ? "success" : "default"} className={`mb-6 border-l-4 ${result.isPresent ? 'border-green-500 bg-green-50/30 dark:bg-green-900/20' : 'border-border bg-background/50 dark:bg-muted/20'}`}>
                  <div className="flex items-start">
                    {result.isPresent ? (
                      <CheckCircle className="h-6 w-6 mr-3 text-green-600 dark:text-green-500 flex-shrink-0 mt-1" />
                    ) : (
-                     <XCircle className="h-6 w-6 mr-3 text-destructive flex-shrink-0 mt-1" />
+                     <XCircle className="h-6 w-6 mr-3 text-muted-foreground flex-shrink-0 mt-1" /> // Use muted XCircle if not present
                    )}
                    <div className="flex-grow">
                       <AlertTitle className="font-semibold text-xl mb-1">
@@ -492,12 +604,12 @@ export default function Home() {
                       <AlertDescription className="text-base">
                          {result.reason || (result.isPresent ? "The person appears to be present in the video." : "The person does not appear to be present in the video.")}
                          {result.confidence !== undefined && result.confidence !== null && (
-                             <Badge variant="secondary" className="ml-2">Confidence: {result.confidence.toFixed(2)}</Badge>
+                             <Badge variant={result.isPresent ? "success" : "secondary"} className="ml-2">Confidence: {result.confidence.toFixed(2)}</Badge>
                          )}
                       </AlertDescription>
-                       {result.isPresent && result.timestamps && result.timestamps.length > 0 && (
+                       {result.timestamps && result.timestamps.length > 0 && (
                            <p className="text-sm text-muted-foreground mt-2">
-                               Detected at timestamps: {result.timestamps.map(t => t.toFixed(1) + 's').join(', ')}
+                               Potential match timestamps: {result.timestamps.map(t => t.toFixed(1) + 's').join(', ')}
                            </p>
                        )}
                     </div>
@@ -505,8 +617,8 @@ export default function Home() {
                 </Alert>
 
 
-              {/* Snapshots Section */}
-                {result.isPresent && result.snapshots && result.snapshots.length > 0 && (
+              {/* Snapshots Section - Show if snapshots array exists and has items */}
+                {result.snapshots && result.snapshots.length > 0 && (
                   <div className="mt-6 pt-6 border-t border-border/50">
                     <h3 className="font-semibold text-lg mb-4 text-center flex items-center justify-center gap-2">
                         <Camera className="w-5 h-5" /> Extracted Snapshots
@@ -514,11 +626,12 @@ export default function Home() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       {result.snapshots.map((snapshot: Snapshot, index: number) => (
                         <Card key={index} className="flex flex-col items-center border rounded-lg p-3 bg-background/70 dark:bg-muted/40 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
-                          <div className="w-full h-48 mb-3 relative bg-muted rounded-md border flex items-center justify-center overflow-hidden">
+                          <div className="w-full h-48 mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
                             {isValidAndNotPlaceholder(snapshot.dataUri) ? (
                                 <Image
                                   src={snapshot.dataUri}
                                   alt={`Extracted Snapshot at ${snapshot.timestamp.toFixed(1)}s`}
+                                  // Use fill and object-contain for better scaling within the container
                                   layout="fill"
                                   objectFit="contain"
                                   className="transition-transform duration-300 ease-in-out hover:scale-105"
@@ -528,7 +641,7 @@ export default function Home() {
                                 <div className="flex flex-col items-center justify-center text-muted-foreground text-center p-2">
                                     <ImageOff className="h-10 w-10 mb-2 text-destructive/50" />
                                     <span className="text-xs font-medium">{snapshot.generationStatus === 'failed' ? 'Extraction Failed' : 'Placeholder'}</span>
-                                    <span className="text-xs">Could not extract frame</span>
+                                     {snapshot.generationStatus === 'failed' && <span className="text-xs">Could not extract frame</span>}
                                 </div>
                             )}
                           </div>
@@ -548,12 +661,19 @@ export default function Home() {
                   </div>
                 )}
 
-                 {/* Message if person identified but no snapshots could be extracted/shown */}
-                 {result.isPresent && (!result.snapshots || result.snapshots.length === 0) && (
+                 {/* Message if analysis ran but no timestamps/snapshots resulted */}
+                 {(!result.snapshots || result.snapshots.length === 0) && (!result.timestamps || result.timestamps.length === 0) && (
                      <div className="mt-6 pt-6 border-t border-border/50 text-center">
-                        <p className="text-base text-muted-foreground italic">Person identified, but visual snapshots could not be extracted (or no timestamps were provided).</p>
+                        <p className="text-base text-muted-foreground italic">No potential match timestamps were found or snapshots could be extracted.</p>
                     </div>
                 )}
+                {/* Message if timestamps were found but extraction failed for all */}
+                 {result.timestamps && result.timestamps.length > 0 && (!result.snapshots || result.snapshots.length === 0) && (
+                    <div className="mt-6 pt-6 border-t border-border/50 text-center">
+                        <p className="text-base text-muted-foreground italic">Potential match timestamps found, but visual snapshots could not be extracted.</p>
+                    </div>
+                 )}
+
 
             </CardContent>
           </Card>
