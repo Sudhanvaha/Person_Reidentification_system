@@ -383,10 +383,9 @@ export default function Home() {
 
       let finalResult: ReIdentifyPersonOutputWithSnapshots = { ...llmResult, snapshots: [] }; // Initialize with empty snapshots
 
-      // Extract snapshots IF timestamps are available, regardless of isPresent status
-      // This allows showing potential matches even if the final confidence is low.
-      if (llmResult.timestamps && llmResult.timestamps.length > 0) {
-        toast({ variant: "default", title: "Analysis Complete", description: "Extracting potential snapshot frames..." });
+      // Extract snapshots IF timestamps are available AND the person is identified as present.
+      if (llmResult.isPresent && llmResult.timestamps && llmResult.timestamps.length > 0) {
+        toast({ variant: "default", title: "Analysis Complete", description: "Extracting snapshot frames..." });
         // Extract snapshots client-side based on timestamps
         const extractedSnaps = await extractSnapshots(llmResult.timestamps);
         finalResult.snapshots = extractedSnaps; // Add extracted snapshots to the result
@@ -398,16 +397,15 @@ export default function Home() {
           } else if (extractedSnaps.length > 0) {
                toast({ variant: "warning", title: "Snapshot Extraction Issues", description: "Could not extract any visual snapshots." });
           } else {
-              // This case should ideally not happen if llmResult.timestamps.length > 0,
-              // but handle it just in case extractSnapshots returns empty.
-              toast({ variant: "warning", title: "Snapshots", description: "No snapshots could be processed." });
+              // This case means timestamps were provided but extraction failed completely.
+              toast({ variant: "warning", title: "Snapshots", description: "Snapshots could not be extracted from the identified timestamps." });
           }
 
       } else if (llmResult.isPresent) {
           // Person identified, but LLM provided no timestamps
           toast({ variant: "default", title: "Person Identified", description: "Location timestamps not provided by analysis." });
       } else {
-          // Person not identified and no timestamps
+          // Person not identified (and therefore no timestamps to extract from)
           toast({ variant: "default", title: "Person Not Identified", description: llmResult.reason || "The person was not found in the video." });
       }
 
@@ -444,7 +442,7 @@ export default function Home() {
           case 'extracted': return 'success';
           case 'failed': return 'destructive';
           case 'placeholder': return 'secondary';
-          default: return 'warning';
+          default: return 'warning'; // Use warning for 'unknown' or undefined
       }
   }
    const getSnapshotStatusText = (status?: Snapshot['generationStatus']): string => {
@@ -473,7 +471,7 @@ export default function Home() {
               src={videoSrc}
               muted
               playsInline
-              controls // Add controls for debugging seeking issues if needed
+              // controls // Add controls for debugging seeking issues if needed
               style={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '1px', height: '1px' }} // Keep offscreen but allow browser to load/process
               // style={{ display: 'none' }} // Original - hide completely
               crossOrigin="anonymous"
@@ -607,7 +605,7 @@ export default function Home() {
                              <Badge variant={result.isPresent ? "success" : "secondary"} className="ml-2">Confidence: {result.confidence.toFixed(2)}</Badge>
                          )}
                       </AlertDescription>
-                       {result.timestamps && result.timestamps.length > 0 && (
+                       {result.isPresent && result.timestamps && result.timestamps.length > 0 && ( // Only show timestamps if person is present
                            <p className="text-sm text-muted-foreground mt-2">
                                Potential match timestamps: {result.timestamps.map(t => t.toFixed(1) + 's').join(', ')}
                            </p>
@@ -617,8 +615,8 @@ export default function Home() {
                 </Alert>
 
 
-              {/* Snapshots Section - Show if snapshots array exists and has items */}
-                {result.snapshots && result.snapshots.length > 0 && (
+              {/* Snapshots Section - Show if snapshots array exists and has items AND person was identified */}
+                {result.isPresent && result.snapshots && result.snapshots.length > 0 && (
                   <div className="mt-6 pt-6 border-t border-border/50">
                     <h3 className="font-semibold text-lg mb-4 text-center flex items-center justify-center gap-2">
                         <Camera className="w-5 h-5" /> Extracted Snapshots
@@ -632,10 +630,11 @@ export default function Home() {
                                   src={snapshot.dataUri}
                                   alt={`Extracted Snapshot at ${snapshot.timestamp.toFixed(1)}s`}
                                   // Use fill and object-contain for better scaling within the container
-                                  layout="fill"
-                                  objectFit="contain"
+                                  fill // Use fill layout
+                                  style={{ objectFit: 'contain' }} // Use style for object-fit with fill
                                   className="transition-transform duration-300 ease-in-out hover:scale-105"
                                   data-ai-hint="person identified snapshot"
+                                  unoptimized // Add if base64 strings cause issues with Next/Image optimization
                                 />
                             ) : (
                                 <div className="flex flex-col items-center justify-center text-muted-foreground text-center p-2">
@@ -661,16 +660,16 @@ export default function Home() {
                   </div>
                 )}
 
-                 {/* Message if analysis ran but no timestamps/snapshots resulted */}
-                 {(!result.snapshots || result.snapshots.length === 0) && (!result.timestamps || result.timestamps.length === 0) && (
+                 {/* Message if person was identified but no timestamps/snapshots resulted */}
+                 {result.isPresent && (!result.snapshots || result.snapshots.length === 0) && (!result.timestamps || result.timestamps.length === 0) && (
                      <div className="mt-6 pt-6 border-t border-border/50 text-center">
-                        <p className="text-base text-muted-foreground italic">No potential match timestamps were found or snapshots could be extracted.</p>
+                        <p className="text-base text-muted-foreground italic">Person was identified, but no specific timestamps or snapshots could be extracted.</p>
                     </div>
                 )}
-                {/* Message if timestamps were found but extraction failed for all */}
-                 {result.timestamps && result.timestamps.length > 0 && (!result.snapshots || result.snapshots.length === 0) && (
+                 {/* Message if person was identified, timestamps found but extraction failed for all */}
+                 {result.isPresent && result.timestamps && result.timestamps.length > 0 && (!result.snapshots || result.snapshots.length === 0) && (
                     <div className="mt-6 pt-6 border-t border-border/50 text-center">
-                        <p className="text-base text-muted-foreground italic">Potential match timestamps found, but visual snapshots could not be extracted.</p>
+                        <p className="text-base text-muted-foreground italic">Person was identified at specific timestamps, but visual snapshots could not be extracted.</p>
                     </div>
                  )}
 
@@ -682,3 +681,5 @@ export default function Home() {
     </>
   );
 }
+
+    
