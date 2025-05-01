@@ -9,7 +9,7 @@ import { reIdentifyPerson } from "@/ai/flows/re-identify-person";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square, ArrowUp } from "lucide-react"; // Added ArrowUp for arrow indicator
+import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square, ArrowDown } from "lucide-react"; // Changed ArrowUp to ArrowDown
 import Image from "next/image";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +33,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null); // Ref for the video element
   const canvasRef = useRef<HTMLCanvasElement>(null); // Ref for drawing frames to canvas
+  const snapshotImageRefs = useRef<{[key: number]: HTMLImageElement | null}>({}); // Refs for snapshot images to get dimensions
+  const snapshotCanvasRefs = useRef<{[key: number]: HTMLCanvasElement | null}>({}); // Refs for snapshot canvases
+
   const { toast } = useToast();
 
   // Preload placeholder image
@@ -470,37 +473,102 @@ export default function Home() {
   }
 
   // Helper to draw arrow on canvas
-  const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox) => {
+  // Modified to draw a downward arrow towards the center of the box
+  const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox, imageElement?: HTMLImageElement | null) => {
     const context = canvas.getContext('2d');
-    if (!context || !canvas.width || !canvas.height) { // Check canvas dimensions too
-        console.warn("Canvas context or dimensions not ready for drawing arrow.");
+
+    // Determine the effective dimensions to use for scaling coordinates
+    let effectiveWidth = canvas.width;
+    let effectiveHeight = canvas.height;
+
+    // If image dimensions are available and the image uses 'contain', calculate the scaled dimensions
+    if (imageElement && imageElement.naturalWidth > 0 && imageElement.naturalHeight > 0) {
+        const imgAspect = imageElement.naturalWidth / imageElement.naturalHeight;
+        const canvasAspect = canvas.width / canvas.height;
+
+        if (imgAspect > canvasAspect) { // Image is wider than canvas aspect ratio
+            effectiveWidth = canvas.width;
+            effectiveHeight = canvas.width / imgAspect;
+        } else { // Image is taller or same aspect ratio
+            effectiveHeight = canvas.height;
+            effectiveWidth = canvas.height * imgAspect;
+        }
+    }
+     // Calculate offsets for 'contain' positioning
+    const offsetX = (canvas.width - effectiveWidth) / 2;
+    const offsetY = (canvas.height - effectiveHeight) / 2;
+
+
+    if (!context || !effectiveWidth || !effectiveHeight) { // Check effective dimensions
+        console.warn("Canvas context or effective dimensions not ready for drawing arrow.");
         return;
     }
 
     // Clear previous drawings if reusing canvas
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Calculate arrow start and end points based on canvas dimensions
-    const x = (box.xMin + box.xMax) / 2 * canvas.width; // Center of top edge
-    const y = box.yMin * canvas.height; // Top edge
-    const arrowLength = Math.min(canvas.height * 0.1, 30); // Arrow length relative to canvas height, max 30px
-    const arrowTipY = Math.max(0, y - arrowLength); // Ensure arrow tip doesn't go above canvas
-    const headLength = Math.min(arrowLength * 0.4, 8); // Arrow head size, max 8px
+    // Calculate arrow target point (center of the bounding box) based on effective dimensions
+    const targetX = offsetX + (box.xMin + box.xMax) / 2 * effectiveWidth;
+    const targetY = offsetY + (box.yMin + box.yMax) / 2 * effectiveHeight;
+
+    // Calculate arrow start point (above the target point)
+    const arrowLength = Math.min(effectiveHeight * 0.1, 30); // Arrow length relative to effective height, max 30px
+    const arrowStartY = Math.max(0, targetY - arrowLength * 1.5); // Start arrow further above the center point
+
+    // Ensure arrow doesn't start outside canvas bounds (though targetY should prevent this if box is valid)
+    const arrowTipY = Math.min(canvas.height, targetY - arrowLength * 0.2); // Tip slightly above center
+
+    const headLength = Math.min(arrowLength * 0.5, 10); // Arrow head size, max 10px
 
     context.beginPath();
-    context.moveTo(x, y);
-    context.lineTo(x, arrowTipY);
+    context.moveTo(targetX, arrowStartY); // Start above
+    context.lineTo(targetX, arrowTipY); // Draw line down towards the target center
 
-    // Arrowhead
-    context.lineTo(x - headLength / 2, arrowTipY + headLength);
-    context.moveTo(x, arrowTipY);
-    context.lineTo(x + headLength / 2, arrowTipY + headLength);
+    // Arrowhead points down
+    context.moveTo(targetX, arrowTipY);
+    context.lineTo(targetX - headLength / 2, arrowTipY - headLength); // Point left-up
+    context.moveTo(targetX, arrowTipY);
+    context.lineTo(targetX + headLength / 2, arrowTipY - headLength); // Point right-up
+
 
     context.strokeStyle = 'red'; // Arrow color
-    context.lineWidth = 2; // Thinner arrow line
+    context.lineWidth = 3; // Thicker arrow line
     context.stroke();
-    console.log(`Drew arrow at (${x.toFixed(0)}, ${y.toFixed(0)}) -> (${x.toFixed(0)}, ${arrowTipY.toFixed(0)})`);
+    console.log(`Drew arrow from (${targetX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${targetX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting center.`);
   };
+
+  // Use effect to redraw arrows when image dimensions are loaded or result changes
+  useEffect(() => {
+      if (result?.snapshots) {
+          result.snapshots.forEach((snapshot, index) => {
+              if (snapshot.boundingBox) {
+                  const canvas = snapshotCanvasRefs.current[index];
+                  const image = snapshotImageRefs.current[index];
+                  if (canvas && image && image.complete) { // Check if image is loaded
+                    // Ensure canvas has dimensions before drawing
+                      if (canvas.width === 0 || canvas.height === 0) {
+                          // Set canvas dimensions based on container or image if needed
+                           // This might require accessing the container dimensions
+                           // For now, let's assume container gives size via CSS
+                           console.warn("Canvas dimensions zero, attempting redraw later");
+                           // Optionally set a timeout to retry drawing
+                      } else {
+                           drawArrowOnCanvas(canvas, snapshot.boundingBox, image);
+                      }
+                  } else if (canvas && image) {
+                      // Image not loaded yet, add event listener
+                      const handleLoad = () => {
+                          if (canvas && snapshot.boundingBox && image) {
+                              drawArrowOnCanvas(canvas, snapshot.boundingBox, image);
+                          }
+                          image.removeEventListener('load', handleLoad); // Clean up listener
+                      };
+                      image.addEventListener('load', handleLoad);
+                  }
+              }
+          });
+      }
+  }, [result?.snapshots]); // Re-run when snapshots change
 
 
   return (
@@ -674,10 +742,12 @@ export default function Home() {
                       {result.snapshots.map((snapshot: Snapshot, index: number) => (
                         <Card key={index} className="flex flex-col items-center border rounded-lg p-3 bg-background/70 dark:bg-muted/40 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
                           {/* Container for Image and Arrow Canvas */}
-                          <div className="w-full h-48 mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
+                           {/* Set explicit size for the container to match image */}
+                           <div className="w-full h-48 mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
                             {isValidAndNotPlaceholder(snapshot.dataUri) ? (
                               <>
                                 <Image
+                                  ref={el => snapshotImageRefs.current[index] = el} // Store image ref
                                   src={snapshot.dataUri}
                                   alt={`Extracted Snapshot at ${snapshot.timestamp.toFixed(1)}s`}
                                   fill // Use fill layout
@@ -685,29 +755,33 @@ export default function Home() {
                                   className="transition-transform duration-300 ease-in-out hover:scale-105"
                                   data-ai-hint="person identified snapshot"
                                   unoptimized // Add if base64 strings cause issues with Next/Image optimization
+                                  // Add onLoad to trigger redraw if necessary, though useEffect handles it now
+                                   onLoad={(e) => {
+                                       const img = e.target as HTMLImageElement;
+                                       const canvas = snapshotCanvasRefs.current[index];
+                                       if (canvas && snapshot.boundingBox) {
+                                           // Optionally resize canvas here if needed based on img dimensions
+                                           // canvas.width = img.offsetWidth; // Use offsetWidth/Height if available
+                                           // canvas.height = img.offsetHeight;
+                                           drawArrowOnCanvas(canvas, snapshot.boundingBox, img);
+                                       }
+                                   }}
                                 />
                                 {/* Render Arrow using Canvas if bounding box is available */}
                                 {snapshot.boundingBox && (
                                   <canvas
-                                    // Set width/height to ensure drawing context has dimensions
-                                    // They will be scaled by CSS
-                                    width={300} // Example base width
-                                    height={200} // Example base height
+                                     ref={el => snapshotCanvasRefs.current[index] = el} // Store canvas ref
+                                    // Set intrinsic size, CSS will scale it via 'absolute' and width/height 100%
+                                    // Set a reasonable base size; it will be cleared and redrawn based on container/image
+                                     width={300} // Base width, adjust if needed
+                                     height={200} // Base height, adjust if needed
                                     style={{
                                       position: 'absolute',
                                       left: 0,
                                       top: 0,
-                                      width: '100%',
-                                      height: '100%',
+                                      width: '100%', // Fill container
+                                      height: '100%', // Fill container
                                       pointerEvents: 'none', // Allow clicks through the canvas
-                                    }}
-                                    ref={(canvasElement) => {
-                                      if (canvasElement && snapshot.boundingBox) {
-                                        // Call drawing function when canvas element is ready
-                                        // Check if the canvas already has the desired dimensions from the image load, if not, maybe wait?
-                                        // For simplicity, assuming the fixed width/height is okay for now
-                                        drawArrowOnCanvas(canvasElement, snapshot.boundingBox);
-                                      }
                                     }}
                                   />
                                 )}
@@ -728,7 +802,7 @@ export default function Home() {
                                 </span>
                                  {/* Indicate if localization data (box/arrow) is present */}
                                  <span className={`flex items-center gap-1 ${snapshot.boundingBox ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground/60'}`}>
-                                      {snapshot.boundingBox ? <ArrowUp className="w-3 h-3" /> : <Square className="w-3 h-3 opacity-50" />}
+                                      {snapshot.boundingBox ? <ArrowDown className="w-3 h-3" /> : <Square className="w-3 h-3 opacity-50" />}
                                       <span className="text-xs">{snapshot.boundingBox ? 'Located' : 'No Loc'}</span>
                                  </span>
                                 <Badge variant={getSnapshotBadgeVariant(snapshot.generationStatus)} className="text-xs px-1.5 py-0.5">
@@ -762,4 +836,3 @@ export default function Home() {
     </>
   );
 }
-
