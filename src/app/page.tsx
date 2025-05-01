@@ -1,19 +1,20 @@
+
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
-// Import the flow output type WITHOUT snapshots initially
-import type { ReIdentifyPersonOutput, ReIdentifyPersonInput, Snapshot, ReIdentifyPersonOutputWithSnapshots } from "@/ai/flows/re-identify-person";
+// Import types including BoundingBox and updated output types
+import type { ReIdentifyPersonOutput, ReIdentifyPersonInput, Snapshot, ReIdentifyPersonOutputWithSnapshots, IdentificationResult, BoundingBox } from "@/ai/flows/re-identify-person";
 import { reIdentifyPerson } from "@/ai/flows/re-identify-person";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film } from "lucide-react"; // Added Film icon
+import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square } from "lucide-react"; // Added Square icon for bounding box indicator
 import Image from "next/image";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress"; // Import Progress
+import { Progress } from "@/components/ui/progress";
 
 // Placeholder data URI (simple gray square) - For fallback UI
 const placeholderDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACgtt2+AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABDSURBVDhPY2AYYAAGEgYGDAlQw/z//z/DwsKCMjIyAAAA///fVAGIYvj7+4eFhQUAAAAA///vrgQ0MDBgfHx8AADsHBFsXnVsmwAAAABJRU5ErkJggg==';
@@ -129,11 +130,15 @@ export default function Home() {
   });
 
   // --- Client-Side Frame Extraction ---
-  const extractFrame = (videoElement: HTMLVideoElement, timestamp: number): Promise<Snapshot> => {
+  // Modified to accept an optional bounding box to associate with the snapshot
+  const extractFrame = (videoElement: HTMLVideoElement, identification: IdentificationResult): Promise<Snapshot> => {
       return new Promise((resolve) => {
+          const timestamp = identification.timestamp;
+          const boundingBox = identification.boundingBox; // Get the bounding box for this timestamp
+
           if (!canvasRef.current) {
               console.error("Canvas ref not available");
-               resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+               resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
               return;
           }
           const canvas = canvasRef.current;
@@ -141,7 +146,7 @@ export default function Home() {
 
           if (!context) {
                console.error("Canvas context not available");
-               resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+               resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
               return;
           }
 
@@ -169,13 +174,14 @@ export default function Home() {
                       }
                        if (!resolved) {
                            resolved = true;
-                           resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                           // Include the boundingBox in the resolved snapshot object
+                           resolve({ timestamp, boundingBox, dataUri, generationStatus: 'extracted' });
                        }
                   } catch (e) {
                        console.error("Error generating data URL from canvas:", e);
                        if (!resolved) {
                             resolved = true;
-                            resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                            resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
                        }
                   }
               } else {
@@ -194,20 +200,20 @@ export default function Home() {
                                 if (!dataUri || dataUri === 'data:,') dataUri = canvas.toDataURL('image/png');
                                 if (!resolved) {
                                     resolved = true;
-                                    resolve({ timestamp, dataUri, generationStatus: 'extracted' });
+                                    resolve({ timestamp, boundingBox, dataUri, generationStatus: 'extracted' });
                                 }
                             } catch (e) {
                                  console.error("Error generating data URL from canvas (retry):", e);
                                  if (!resolved) {
                                      resolved = true;
-                                     resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                                     resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
                                  }
                             }
                        } else {
                             console.error("Video dimensions still not available after delay for timestamp", timestamp);
                             if (!resolved) {
                                 resolved = true;
-                                resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                                resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
                             }
                        }
                    }, 150); // Wait 150ms and try again
@@ -222,7 +228,7 @@ export default function Home() {
               if (resolved) return;
               console.error(`Video seeking error for timestamp ${timestamp}:`, event);
               resolved = true;
-              resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+              resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
           };
 
           // Add listener *before* setting currentTime
@@ -240,22 +246,23 @@ export default function Home() {
                videoElement.removeEventListener('seeked', seekEventHandler);
                videoElement.removeEventListener('error', errorHandler);
                resolved = true;
-               resolve({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' }); // Resolve with failure if timeout reached
+               resolve({ timestamp, boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' }); // Resolve with failure if timeout reached
                console.warn(`Timeout waiting for seeked/error event for timestamp ${timestamp}`);
            }, 3000); // 3 second timeout for seeking
 
       });
   };
 
-   const extractSnapshots = async (timestamps: number[]): Promise<Snapshot[]> => {
-        if (!videoRef.current || timestamps.length === 0) {
+   // Modified to accept IdentificationResult array (timestamp + optional box)
+   const extractSnapshots = async (identifications: IdentificationResult[]): Promise<Snapshot[]> => {
+        if (!videoRef.current || identifications.length === 0) {
             return [];
         }
-        setLoadingMessage(`Extracting ${timestamps.length} snapshot${timestamps.length > 1 ? 's' : ''}...`);
+        setLoadingMessage(`Extracting ${identifications.length} snapshot${identifications.length > 1 ? 's' : ''}...`);
         setExtractionProgress(0);
         const videoElement = videoRef.current;
         const snapshots: Snapshot[] = [];
-        const totalSteps = timestamps.length;
+        const totalSteps = identifications.length;
 
         // Mute video to prevent audio playback during seeking
         const originalMuted = videoElement.muted;
@@ -327,18 +334,19 @@ export default function Home() {
         }
 
 
-        for (let i = 0; i < timestamps.length; i++) {
-            const timestamp = timestamps[i];
-             console.log(`[Snapshot Extraction] Attempting frame at ${timestamp.toFixed(2)}s`);
+        for (let i = 0; i < identifications.length; i++) {
+            const identification = identifications[i]; // Use the full identification object
+            const timestamp = identification.timestamp; // Get timestamp from it
+            console.log(`[Snapshot Extraction] Attempting frame at ${timestamp.toFixed(2)}s`);
             try {
-                 // Small delay between seeks can sometimes help browser stability
-                 // await new Promise(resolve => setTimeout(resolve, 50));
-                const snapshot = await extractFrame(videoElement, timestamp);
+                // Pass the entire identification object (including potential bounding box)
+                const snapshot = await extractFrame(videoElement, identification);
                 snapshots.push(snapshot);
-                console.log(`[Snapshot Extraction] ${snapshot.generationStatus === 'extracted' ? 'Success' : 'Failed'} for ${timestamp.toFixed(2)}s. URI Length: ${snapshot.dataUri.length}`);
+                console.log(`[Snapshot Extraction] ${snapshot.generationStatus === 'extracted' ? 'Success' : 'Failed'} for ${timestamp.toFixed(2)}s. Box: ${snapshot.boundingBox ? 'Yes' : 'No'}. URI Length: ${snapshot.dataUri.length}`);
             } catch (error) {
                  console.error(`[Snapshot Extraction] Error extracting frame at ${timestamp.toFixed(2)}s:`, error);
-                 snapshots.push({ timestamp, dataUri: placeholderDataUri, generationStatus: 'failed' });
+                 // Include timestamp and potentially null bounding box in failed snapshot
+                 snapshots.push({ timestamp, boundingBox: identification.boundingBox, dataUri: placeholderDataUri, generationStatus: 'failed' });
             }
              // Update progress
              setExtractionProgress(((i + 1) / totalSteps) * 100);
@@ -350,7 +358,7 @@ export default function Home() {
 
         setExtractionProgress(0); // Reset progress
         setLoadingMessage("Analysis Complete"); // Update message after extraction
-        console.log(`[Snapshot Extraction] Finished. Extracted ${snapshots.filter(s => s.generationStatus === 'extracted').length} of ${timestamps.length} frames.`);
+        console.log(`[Snapshot Extraction] Finished. Extracted ${snapshots.filter(s => s.generationStatus === 'extracted').length} of ${identifications.length} frames.`);
         return snapshots;
     };
 
@@ -378,17 +386,24 @@ export default function Home() {
 
     try {
       const input: ReIdentifyPersonInput = { photoDataUri, videoDataUri };
-      const llmResult: ReIdentifyPersonOutput = await reIdentifyPerson(input); // LLM result doesn't have snapshots yet
+      const llmResult: ReIdentifyPersonOutput = await reIdentifyPerson(input); // LLM result now includes identifications
       console.log("Re-identification LLM result received:", llmResult);
 
-      let finalResult: ReIdentifyPersonOutputWithSnapshots = { ...llmResult, snapshots: [] }; // Initialize with empty snapshots
+      // Prepare the final result structure, keeping identifications from LLM
+      let finalResult: ReIdentifyPersonOutputWithSnapshots = {
+          isPresent: llmResult.isPresent,
+          confidence: llmResult.confidence,
+          reason: llmResult.reason,
+          identifications: llmResult.identifications, // Keep the original identifications
+          snapshots: [], // Initialize snapshots as empty
+      };
 
-      // Extract snapshots IF timestamps are available AND the person is identified as present.
-      if (llmResult.isPresent && llmResult.timestamps && llmResult.timestamps.length > 0) {
+      // Extract snapshots IF identifications are available AND the person is identified as present.
+      if (llmResult.isPresent && llmResult.identifications && llmResult.identifications.length > 0) {
         toast({ variant: "default", title: "Analysis Complete", description: "Extracting snapshot frames..." });
-        // Extract snapshots client-side based on timestamps
-        const extractedSnaps = await extractSnapshots(llmResult.timestamps);
-        finalResult.snapshots = extractedSnaps; // Add extracted snapshots to the result
+        // Extract snapshots client-side based on the full identifications array (timestamp + box)
+        const extractedSnaps = await extractSnapshots(llmResult.identifications);
+        finalResult.snapshots = extractedSnaps; // Add extracted snapshots (which now include boundingBox) to the result
 
          // Toast based on extraction success
          const successfulSnaps = extractedSnaps.filter(s => s.generationStatus === 'extracted').length;
@@ -397,15 +412,15 @@ export default function Home() {
           } else if (extractedSnaps.length > 0) {
                toast({ variant: "warning", title: "Snapshot Extraction Issues", description: "Could not extract any visual snapshots." });
           } else {
-              // This case means timestamps were provided but extraction failed completely.
+              // This case means identifications were provided but extraction failed completely.
               toast({ variant: "warning", title: "Snapshots", description: "Snapshots could not be extracted from the identified timestamps." });
           }
 
       } else if (llmResult.isPresent) {
-          // Person identified, but LLM provided no timestamps
-          toast({ variant: "default", title: "Person Identified", description: "Location timestamps not provided by analysis." });
+          // Person identified, but LLM provided no identifications (timestamps/boxes)
+          toast({ variant: "default", title: "Person Identified", description: "Location data not provided by analysis." });
       } else {
-          // Person not identified (and therefore no timestamps to extract from)
+          // Person not identified (and therefore no identifications to extract from)
           toast({ variant: "default", title: "Person Not Identified", description: llmResult.reason || "The person was not found in the video." });
       }
 
@@ -453,6 +468,18 @@ export default function Home() {
           default: return 'Unknown';
       }
   }
+
+  // Helper to style the bounding box
+  const getBoundingBoxStyle = (box: BoundingBox): React.CSSProperties => ({
+      position: 'absolute',
+      left: `${box.xMin * 100}%`,
+      top: `${box.yMin * 100}%`,
+      width: `${(box.xMax - box.xMin) * 100}%`,
+      height: `${(box.yMax - box.yMin) * 100}%`,
+      border: '2px solid #00ff00', // Bright green border
+      boxShadow: '0 0 5px 2px rgba(0, 255, 0, 0.5)', // Green glow effect
+      pointerEvents: 'none', // Allow clicks through the box
+  });
 
 
   return (
@@ -605,9 +632,10 @@ export default function Home() {
                              <Badge variant={result.isPresent ? "success" : "secondary"} className="ml-2">Confidence: {result.confidence.toFixed(2)}</Badge>
                          )}
                       </AlertDescription>
-                       {result.isPresent && result.timestamps && result.timestamps.length > 0 && ( // Only show timestamps if person is present
+                       {/* Display timestamps from the 'identifications' array */}
+                       {result.isPresent && result.identifications && result.identifications.length > 0 && (
                            <p className="text-sm text-muted-foreground mt-2">
-                               Potential match timestamps: {result.timestamps.map(t => t.toFixed(1) + 's').join(', ')}
+                               Potential match timestamps: {result.identifications.map(id => id.timestamp.toFixed(1) + 's').join(', ')}
                            </p>
                        )}
                     </div>
@@ -624,18 +652,24 @@ export default function Home() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       {result.snapshots.map((snapshot: Snapshot, index: number) => (
                         <Card key={index} className="flex flex-col items-center border rounded-lg p-3 bg-background/70 dark:bg-muted/40 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
+                          {/* Container for Image and Bounding Box */}
                           <div className="w-full h-48 mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
                             {isValidAndNotPlaceholder(snapshot.dataUri) ? (
+                              <>
                                 <Image
                                   src={snapshot.dataUri}
                                   alt={`Extracted Snapshot at ${snapshot.timestamp.toFixed(1)}s`}
-                                  // Use fill and object-contain for better scaling within the container
                                   fill // Use fill layout
                                   style={{ objectFit: 'contain' }} // Use style for object-fit with fill
                                   className="transition-transform duration-300 ease-in-out hover:scale-105"
                                   data-ai-hint="person identified snapshot"
                                   unoptimized // Add if base64 strings cause issues with Next/Image optimization
                                 />
+                                {/* Render Bounding Box if available */}
+                                {snapshot.boundingBox && (
+                                    <div style={getBoundingBoxStyle(snapshot.boundingBox)}></div>
+                                )}
+                               </>
                             ) : (
                                 <div className="flex flex-col items-center justify-center text-muted-foreground text-center p-2">
                                     <ImageOff className="h-10 w-10 mb-2 text-destructive/50" />
@@ -650,6 +684,11 @@ export default function Home() {
                                      <Clock className="w-3.5 h-3.5" />
                                      {snapshot.timestamp.toFixed(2)}s
                                 </span>
+                                 {/* Indicate if bounding box is present */}
+                                 <span className={`flex items-center gap-1 ${snapshot.boundingBox ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground/60'}`}>
+                                      <Square className="w-3 h-3" />
+                                      <span className="text-xs">{snapshot.boundingBox ? 'Box' : 'No Box'}</span>
+                                 </span>
                                 <Badge variant={getSnapshotBadgeVariant(snapshot.generationStatus)} className="text-xs px-1.5 py-0.5">
                                   {getSnapshotStatusText(snapshot.generationStatus)}
                                 </Badge>
@@ -660,14 +699,14 @@ export default function Home() {
                   </div>
                 )}
 
-                 {/* Message if person was identified but no timestamps/snapshots resulted */}
-                 {result.isPresent && (!result.snapshots || result.snapshots.length === 0) && (!result.timestamps || result.timestamps.length === 0) && (
+                 {/* Message if person was identified but no identifications/snapshots resulted */}
+                 {result.isPresent && (!result.snapshots || result.snapshots.length === 0) && (!result.identifications || result.identifications.length === 0) && (
                      <div className="mt-6 pt-6 border-t border-border/50 text-center">
-                        <p className="text-base text-muted-foreground italic">Person was identified, but no specific timestamps or snapshots could be extracted.</p>
+                        <p className="text-base text-muted-foreground italic">Person was identified, but no specific location data or snapshots could be extracted.</p>
                     </div>
                 )}
-                 {/* Message if person was identified, timestamps found but extraction failed for all */}
-                 {result.isPresent && result.timestamps && result.timestamps.length > 0 && (!result.snapshots || result.snapshots.length === 0) && (
+                 {/* Message if person was identified, identifications found but extraction failed for all */}
+                 {result.isPresent && result.identifications && result.identifications.length > 0 && (!result.snapshots || result.snapshots.length === 0) && (
                     <div className="mt-6 pt-6 border-t border-border/50 text-center">
                         <p className="text-base text-muted-foreground italic">Person was identified at specific timestamps, but visual snapshots could not be extracted.</p>
                     </div>

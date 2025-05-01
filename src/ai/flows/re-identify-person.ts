@@ -1,10 +1,11 @@
 'use server';
 /**
- * @fileOverview A person re-identification AI agent.
+ * @fileOverview A person re-identification AI agent with bounding box output.
  *
  * - reIdentifyPerson - A function that handles the person re-identification process.
  * - ReIdentifyPersonInput - The input type for the reIdentifyPerson function.
  * - ReIdentifyPersonOutput - The return type for the reIdentifyPerson function.
+ * - IdentificationResult - Represents a timestamp and optional bounding box.
  */
 
 import {ai} from '@/ai/ai-instance';
@@ -24,34 +25,51 @@ const ReIdentifyPersonInputSchema = z.object({
 });
 export type ReIdentifyPersonInput = z.infer<typeof ReIdentifyPersonInputSchema>;
 
-// Keep Snapshot type for frontend compatibility, though generationStatus won't be used
-const SnapshotSchema = z.object({
-  timestamp: z.number().describe('The timestamp (in seconds) of the snapshot in the video.'),
-  dataUri: z.string().describe("The snapshot image as a data URI (e.g., 'data:image/jpeg;base64,...')."),
-  generationStatus: z.enum(['success', 'failed', 'placeholder', 'extracted']).optional().describe('Indicates if the snapshot image was successfully extracted or is a placeholder.'),
+// Define Bounding Box schema
+const BoundingBoxSchema = z.object({
+    xMin: z.number().min(0).max(1).describe('Normalized X coordinate of the top-left corner (0-1).'),
+    yMin: z.number().min(0).max(1).describe('Normalized Y coordinate of the top-left corner (0-1).'),
+    xMax: z.number().min(0).max(1).describe('Normalized X coordinate of the bottom-right corner (0-1).'),
+    yMax: z.number().min(0).max(1).describe('Normalized Y coordinate of the bottom-right corner (0-1).'),
+}).describe('Normalized bounding box coordinates (0.0 to 1.0) of the identified person.');
+
+// Combine timestamp and optional bounding box
+const IdentificationResultSchema = z.object({
+  timestamp: z.number().describe('Approximate timestamp (in seconds) where the person is visible.'),
+  boundingBox: BoundingBoxSchema.optional().describe('Bounding box of the person at this timestamp, if clearly identifiable.'),
 });
-export type Snapshot = z.infer<typeof SnapshotSchema>;
+export type IdentificationResult = z.infer<typeof IdentificationResultSchema>;
 
 
 const ReIdentifyPersonOutputSchema = z.object({
   isPresent: z.boolean().describe('Whether the person in the photo is present in the video.'),
   confidence: z.number().min(0).max(1).optional().describe('The confidence score (0-1) of the re-identification, if available.'),
   reason: z.string().describe('The reason for the determination.'),
-  // LLM will now return timestamps instead of generating snapshots directly
-  timestamps: z.array(z.number()).optional().describe('Approximate timestamps (in seconds) where the person might be visible in the video, if present. Return up to 3 distinct timestamps.'),
+  // Use the new IdentificationResult schema for timestamps and boxes
+  identifications: z.array(IdentificationResultSchema).optional().describe('List of timestamps and optional bounding boxes where the person might be visible, if present. Return up to 3 distinct identifications.'),
 });
-// We'll add the extracted snapshots on the client-side, but define the expected final type here
-export type ReIdentifyPersonOutputWithSnapshots = z.infer<typeof ReIdentifyPersonOutputSchema> & {
+export type ReIdentifyPersonOutput = z.infer<typeof ReIdentifyPersonOutputSchema>;
+
+
+// Define Snapshot schema used for client-side rendering
+const SnapshotSchema = z.object({
+  timestamp: z.number().describe('The timestamp (in seconds) of the snapshot in the video.'),
+  dataUri: z.string().describe("The snapshot image as a data URI (e.g., 'data:image/jpeg;base64,...')."),
+  generationStatus: z.enum(['extracted', 'failed', 'placeholder']).optional().describe('Indicates if the snapshot image was successfully extracted or is a placeholder.'),
+  boundingBox: BoundingBoxSchema.optional().describe('Bounding box associated with this snapshot.'), // Add bounding box here too
+});
+export type Snapshot = z.infer<typeof SnapshotSchema>;
+
+// Type for the final result combined on the client-side
+export type ReIdentifyPersonOutputWithSnapshots = Omit<ReIdentifyPersonOutput, 'identifications'> & {
     snapshots?: Snapshot[]; // Snapshots will be added client-side after extraction
+    identifications?: IdentificationResult[]; // Keep identifications for reference
 };
 
-
-// Removed findSnapshotsTool as we are moving to client-side extraction
 
 
 const reIdentifyPersonPrompt = ai.definePrompt({
   name: 'reIdentifyPersonPrompt',
-  // tools: [], // Removed tool
   input: {
     schema: z.object({
       photoDataUri: z
@@ -68,7 +86,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
     }),
   },
   output: {
-    schema: ReIdentifyPersonOutputSchema, // Use the updated output schema with timestamps
+    schema: ReIdentifyPersonOutputSchema, // Use the updated output schema
   },
   prompt: `You are an expert system for person re-identification in videos.
   Your task is to determine if the person shown in the reference PHOTO appears anywhere in the provided VIDEO.
@@ -84,26 +102,32 @@ const reIdentifyPersonPrompt = ai.definePrompt({
   1.  'isPresent': A boolean indicating if the person is found in the video.
   2.  'confidence': (Optional) A confidence score between 0.0 and 1.0 for your determination.
   3.  'reason': A brief explanation justifying your conclusion (e.g., "Person matching the photo's appearance and clothing seen entering the frame at ~3s" or "No individual matching the photo's description was observed in the video.").
-  4.  'timestamps': If and only if you determine the person IS present ('isPresent' is true), provide an array of up to 3 distinct approximate timestamps (in seconds, as numbers, e.g., [2.5, 5.1, 8.0]) where the person is visible. Ensure timestamps are within the video duration (0 to {{videoDuration}} seconds). If the person is not present, return an empty array 'timestamps: []' or omit the field.
+  4.  'identifications': If and only if you determine the person IS present ('isPresent' is true), provide an array of up to 3 distinct 'IdentificationResult' objects. Each object should contain:
+        a. 'timestamp': An approximate timestamp (in seconds, as a number, e.g., 2.5) where the person is visible. Ensure timestamps are within the video duration (0 to {{videoDuration}} seconds).
+        b. 'boundingBox': (Optional) If the person is clearly identifiable at that timestamp, provide a 'boundingBox' object with normalized coordinates (0.0 to 1.0) for the person's location in the frame: { "xMin": <number>, "yMin": <number>, "xMax": <number>, "yMax": <number> }. If a bounding box cannot be reliably determined, omit this field or set it to null.
+     If the person is not present, return an empty array 'identifications: []' or omit the field.
 
-  Example Output (Person Found):
+  Example Output (Person Found with Bounding Box):
   {
     "isPresent": true,
     "confidence": 0.85,
     "reason": "Person matching photo seen near the entrance around 5 seconds.",
-    "timestamps": [4.8, 5.1, 5.5]
+    "identifications": [
+      {
+        "timestamp": 4.8,
+        "boundingBox": { "xMin": 0.6, "yMin": 0.2, "xMax": 0.8, "yMax": 0.7 }
+      },
+      { "timestamp": 5.5 } // Bounding box might be omitted if unclear
+    ]
   }
 
   Example Output (Person Not Found):
   {
     "isPresent": false,
     "reason": "No individual matching the photo's description was observed.",
-    "timestamps": []
+    "identifications": []
   }`,
 });
-
-
-// Removed generateSnapshots helper function
 
 
 // Function to estimate video duration (basic placeholder)
@@ -127,12 +151,12 @@ function estimateVideoDuration(videoDataUri: string): number {
 
 const reIdentifyPersonFlow = ai.defineFlow<
   typeof ReIdentifyPersonInputSchema,
-  typeof ReIdentifyPersonOutputSchema // Flow now directly returns the schema with timestamps
+  typeof ReIdentifyPersonOutputSchema // Flow now returns the schema with identifications (timestamp + optional box)
 >(
   {
     name: 'reIdentifyPersonFlow',
     inputSchema: ReIdentifyPersonInputSchema,
-    outputSchema: ReIdentifyPersonOutputSchema, // Output includes timestamps
+    outputSchema: ReIdentifyPersonOutputSchema, // Output includes identifications array
   },
   async (input) => {
     console.log("[reIdentifyPersonFlow] Starting flow...");
@@ -153,19 +177,33 @@ const reIdentifyPersonFlow = ai.defineFlow<
         throw new Error("LLM analysis failed to produce an output.");
     }
 
-    // Ensure timestamps are within bounds and sorted (optional but good practice)
-    if (llmOutput.timestamps) {
-        llmOutput.timestamps = llmOutput.timestamps
-            .filter(t => t >= 0 && t <= videoDuration)
-            .sort((a, b) => a - b);
-         console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, Timestamps=[${llmOutput.timestamps.join(', ')}]`);
+    // Validate and clean up identifications
+    if (llmOutput.identifications) {
+        llmOutput.identifications = llmOutput.identifications
+            .filter(id => id.timestamp >= 0 && id.timestamp <= videoDuration) // Ensure timestamp is valid
+            .map(id => {
+                // Ensure bounding box values are within 0-1 if present
+                if (id.boundingBox) {
+                    const bb = id.boundingBox;
+                    if (bb.xMin < 0 || bb.xMin > 1 || bb.yMin < 0 || bb.yMin > 1 ||
+                        bb.xMax < 0 || bb.xMax > 1 || bb.yMax < 0 || bb.yMax > 1 ||
+                        bb.xMin >= bb.xMax || bb.yMin >= bb.yMax) {
+                        console.warn(`[reIdentifyPersonFlow] Invalid bounding box received for timestamp ${id.timestamp}, removing it.`);
+                        return { ...id, boundingBox: undefined }; // Remove invalid box
+                    }
+                }
+                return id;
+            })
+            .sort((a, b) => a.timestamp - b.timestamp); // Sort by timestamp
+
+        console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, Identifications=`, llmOutput.identifications);
     } else {
-        console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, No Timestamps Provided.`);
-        llmOutput.timestamps = []; // Ensure timestamps array exists even if empty
+        console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, No Identifications Provided.`);
+        llmOutput.identifications = []; // Ensure identifications array exists even if empty
     }
 
 
-    // Return the LLM output directly. Snapshot extraction will happen client-side.
+    // Return the LLM output directly. Snapshot extraction and bounding box display will happen client-side.
     return llmOutput;
   }
 );
@@ -180,10 +218,13 @@ export async function reIdentifyPerson(input: ReIdentifyPersonInput): Promise<Re
       return result;
   } catch (error) {
       console.error("[reIdentifyPerson] Error executing reIdentifyPersonFlow:", error);
+       // Ensure the error response matches the schema
        return {
             isPresent: false,
             reason: `An error occurred during processing: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            timestamps: [], // Ensure timestamps is an empty array on error
+            identifications: [], // Ensure identifications is an empty array on error
         };
   }
 }
+
+    
