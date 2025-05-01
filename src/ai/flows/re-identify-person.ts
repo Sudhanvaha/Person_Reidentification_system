@@ -90,44 +90,46 @@ const reIdentifyPersonPrompt = ai.definePrompt({
     schema: ReIdentifyPersonOutputSchema, // Use the updated output schema
   },
   prompt: `You are an expert system for person re-identification in videos.
-  Your task is to determine if the person shown in the reference PHOTO appears anywhere in the provided VIDEO.
+Your task is to determine **specifically if the person shown in the reference PHOTO** appears anywhere in the provided VIDEO.
 
-  Reference Photo: {{media url=photoDataUri}}
-  Video to Analyze: {{media url=videoDataUri}}
+Reference Photo: {{media url=photoDataUri}}
+Video to Analyze: {{media url=videoDataUri}}
 
-  The video duration is {{videoDuration}} seconds.
+The video duration is {{videoDuration}} seconds.
 
-  Carefully analyze the visual content of the video and compare it against the reference photo. Look for matching individuals based on appearance, clothing, and other visual features.
+**Crucially, focus *only* on the individual matching the reference photo.** Ignore other people in the video unless necessary for context.
 
-  Respond with a JSON object containing:
-  1.  'isPresent': A boolean indicating if the person is found in the video.
-  2.  'confidence': (Optional) A confidence score between 0.0 and 1.0 for your determination.
-  3.  'reason': A brief explanation justifying your conclusion (e.g., "Person matching the photo's appearance and clothing seen entering the frame at ~3s" or "No individual matching the photo's description was observed in the video.").
-  4.  'identifications': If and only if you determine the person IS present ('isPresent' is true), provide an array of up to 3 distinct 'IdentificationResult' objects. Each object should contain:
-        a. 'timestamp': An approximate timestamp (in seconds, as a number, e.g., 2.5) where the person is visible. Ensure timestamps are within the video duration (0 to {{videoDuration}} seconds).
-        b. 'boundingBox': (Optional) If the person is clearly identifiable at that timestamp, provide a 'boundingBox' object with normalized coordinates (0.0 to 1.0) for the person's location in the frame: { "xMin": <number>, "yMin": <number>, "xMax": <number>, "yMax": <number> }. Make sure xMin < xMax and yMin < yMax. If a bounding box cannot be reliably determined, omit this field or set it to null.
-     If the person is not present, return an empty array 'identifications: []' or omit the field.
+Carefully analyze the visual content of the video and compare it against the reference photo. Look for the matching individual based on appearance (face, hair, build), clothing, and other visual features visible in the photo.
 
-  Example Output (Person Found with Bounding Box):
-  {
-    "isPresent": true,
-    "confidence": 0.85,
-    "reason": "Person matching photo seen near the entrance around 5 seconds.",
-    "identifications": [
-      {
-        "timestamp": 4.8,
-        "boundingBox": { "xMin": 0.6, "yMin": 0.2, "xMax": 0.8, "yMax": 0.7 }
-      },
-      { "timestamp": 5.5 } // Bounding box might be omitted if unclear
-    ]
-  }
+Respond with a JSON object containing:
+1.  'isPresent': A boolean indicating if the specific person from the photo is found in the video.
+2.  'confidence': (Optional) A confidence score between 0.0 and 1.0 for your determination.
+3.  'reason': A brief explanation justifying your conclusion (e.g., "Person matching the photo's appearance and clothing seen entering the frame at ~3s" or "No individual matching the photo's description was observed in the video.").
+4.  'identifications': If and only if you determine the target person IS present ('isPresent' is true), provide an array of up to 3 distinct 'IdentificationResult' objects. Each object should contain:
+    a. 'timestamp': An approximate timestamp (in seconds, as a number, e.g., 2.5) where the *target person* is visible. Ensure timestamps are within the video duration (0 to {{videoDuration}} seconds).
+    b. 'boundingBox': (Optional) If the *target person* is clearly identifiable at that timestamp, provide an accurate 'boundingBox' object specifically enclosing *that person*. Use normalized coordinates (0.0 to 1.0): { "xMin": <number>, "yMin": <number>, "xMax": <number>, "yMax": <number> }. Make sure xMin < xMax and yMin < yMax. **Ensure the box tightly frames the identified person from the photo.** If a bounding box cannot be reliably determined for the target person, omit this field or set it to null.
+   If the target person is not present, return an empty array 'identifications: []' or omit the field.
 
-  Example Output (Person Not Found):
-  {
-    "isPresent": false,
-    "reason": "No individual matching the photo's description was observed.",
-    "identifications": []
-  }`,
+Example Output (Person Found with Accurate Bounding Box):
+{
+  "isPresent": true,
+  "confidence": 0.85,
+  "reason": "Person matching photo seen near the entrance around 5 seconds.",
+  "identifications": [
+    {
+      "timestamp": 4.8,
+      "boundingBox": { "xMin": 0.6, "yMin": 0.2, "xMax": 0.8, "yMax": 0.7 } // Box around the identified person
+    },
+    { "timestamp": 5.5 } // Bounding box might be omitted if unclear
+  ]
+}
+
+Example Output (Person Not Found):
+{
+  "isPresent": false,
+  "reason": "No individual matching the photo's description was observed.",
+  "identifications": []
+}`,
 });
 
 
