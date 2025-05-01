@@ -26,8 +26,9 @@ export type ReIdentifyPersonInput = z.infer<typeof ReIdentifyPersonInputSchema>;
 
 const SnapshotSchema = z.object({
   timestamp: z.number().describe('The timestamp (in seconds) of the snapshot in the video.'),
-  dataUri: z.string().describe('The data URI of the snapshot image.'),
+  dataUri: z.string().describe("The snapshot image as a data URI (e.g., 'data:image/png;base64,...')."),
 });
+export type Snapshot = z.infer<typeof SnapshotSchema>;
 
 const ReIdentifyPersonOutputSchema = z.object({
   isPresent: z.boolean().describe('Whether the person in the photo is present in the video.'),
@@ -37,7 +38,7 @@ const ReIdentifyPersonOutputSchema = z.object({
 });
 export type ReIdentifyPersonOutput = z.infer<typeof ReIdentifyPersonOutputSchema>;
 
-// Dummy tool to simulate finding snapshots in the video.  In a real application, this would use
+// Dummy tool to simulate finding snapshots in the video. In a real application, this would use
 // a computer vision model to find frames where the person is visible.
 const findSnapshotsTool = ai.defineTool({
   name: 'findSnapshots',
@@ -49,17 +50,20 @@ const findSnapshotsTool = ai.defineTool({
   }),
   outputSchema: z.array(SnapshotSchema).describe('A list of snapshots (data URIs) with timestamps where the person is visible in the video.'),
 }, async input => {
-  const {videoDataUri, numSnapshots, videoDuration} = input;
+  const { videoDataUri, numSnapshots, videoDuration } = input;
   // In a real application, this would use a computer vision model to find frames where the person is visible.
   // For this example, we'll just return some dummy snapshots with dummy timestamps, ensuring they are within videoDuration.
-  const snapshots: SnapshotSchema[] = [];
+  const snapshots: Snapshot[] = [];
+  // Placeholder 50x50 gray square data URI
+  const placeholderDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAIAAACRXR/mAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABFSURBVFhH7c5BDQAwEASh+je9NZY9QVYUqv1okx49e/bs2bNnz549e/bs2bNnz549e/bs2bNnz549e/bs2bNnz549e/bsGa83fAABcltXkyQAAAAASUVORK5CYII=';
+
   for (let i = 0; i < numSnapshots; i++) {
     // Generate a dummy timestamp (0 to videoDuration seconds).
     // Ensure timestamp is within videoDuration.
     const timestamp = Math.min(Math.random() * videoDuration, videoDuration);
     snapshots.push({
       timestamp: timestamp,
-      dataUri: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`,
+      dataUri: placeholderDataUri, // Use the placeholder data URI
     });
   }
   return snapshots;
@@ -92,7 +96,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
     }),
   },
   prompt: `You are an expert in person re-identification. Given a photo of a person and a video, determine if the person in the photo is present in the video.
-  
+
   The video is {{videoDuration}} seconds long.
 
   Photo: {{media url=photoDataUri}}
@@ -100,13 +104,15 @@ const reIdentifyPersonPrompt = ai.definePrompt({
 
   Respond with whether the person is present in the video, a confidence score if available, and the reason for your determination.
 
-  If the person is present in the video, use the findSnapshots tool to find the timestamps where the person is visible. Specifically, return a list of timestamps and a brief explanation of where the person is visible. The snapshots show when and where the person is present in the video.`,
+  If the person is present in the video, use the findSnapshots tool to find 3 snapshots with timestamps where the person is visible. Ensure the timestamps are within the video duration ({{videoDuration}} seconds).`,
 });
 
-async function getSnapshots(videoDataUri: string, videoDuration: number): Promise<SnapshotSchema[]> {
+async function getSnapshots(videoDataUri: string, videoDuration: number): Promise<Snapshot[]> {
   try {
+    // Request 3 snapshots from the tool
     const snapshots = await findSnapshotsTool({videoDataUri, numSnapshots: 3, videoDuration});
-    return snapshots;
+    // Ensure timestamps are within the video duration
+    return snapshots.map(s => ({...s, timestamp: Math.min(s.timestamp, videoDuration)}));
   } catch (error) {
     console.error('Error finding snapshots:', error);
     return [];
@@ -123,17 +129,21 @@ const reIdentifyPersonFlow = ai.defineFlow<
     outputSchema: ReIdentifyPersonOutputSchema,
   },
   async input => {
-    // Extract video duration from the video data URI.  This is a dummy value.  A real implementation would need to parse the video data.
-    const videoDuration = 5;
+    // TODO: Extract video duration properly. Using a fixed dummy value for now.
+    // In a real app, you'd need a library or method to parse the video metadata.
+    const videoDuration = 5; // Dummy duration in seconds
 
-    const {output} = await reIdentifyPersonPrompt({...input, videoDuration});
+    const promptInput = { ...input, videoDuration };
+    const { output } = await reIdentifyPersonPrompt(promptInput);
 
-    let snapshots: SnapshotSchema[] | undefined = undefined;
+    let snapshots: Snapshot[] | undefined = undefined;
     if (output?.isPresent) {
-      snapshots = await getSnapshots(input.videoDataUri, videoDuration);
+        // Only call getSnapshots if the LLM confirms presence
+        snapshots = await getSnapshots(input.videoDataUri, videoDuration);
     }
 
-    return {...output, snapshots};
+    // Merge the prompt output with the snapshots
+    return { ...output!, snapshots }; // Use non-null assertion as output should be defined
   }
 );
 
