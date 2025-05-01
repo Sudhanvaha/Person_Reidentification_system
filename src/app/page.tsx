@@ -9,7 +9,7 @@ import { reIdentifyPerson } from "@/ai/flows/re-identify-person";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square } from "lucide-react"; // Added Square icon for bounding box indicator
+import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square, ArrowUp } from "lucide-react"; // Added ArrowUp for arrow indicator
 import Image from "next/image";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
@@ -469,17 +469,38 @@ export default function Home() {
       }
   }
 
-  // Helper to style the bounding box
-  const getBoundingBoxStyle = (box: BoundingBox): React.CSSProperties => ({
-      position: 'absolute',
-      left: `${box.xMin * 100}%`,
-      top: `${box.yMin * 100}%`,
-      width: `${(box.xMax - box.xMin) * 100}%`,
-      height: `${(box.yMax - box.yMin) * 100}%`,
-      border: '2px solid #00ff00', // Bright green border
-      boxShadow: '0 0 5px 2px rgba(0, 255, 0, 0.5)', // Green glow effect
-      pointerEvents: 'none', // Allow clicks through the box
-  });
+  // Helper to draw arrow on canvas
+  const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox) => {
+    const context = canvas.getContext('2d');
+    if (!context || !canvas.width || !canvas.height) { // Check canvas dimensions too
+        console.warn("Canvas context or dimensions not ready for drawing arrow.");
+        return;
+    }
+
+    // Clear previous drawings if reusing canvas
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Calculate arrow start and end points based on canvas dimensions
+    const x = (box.xMin + box.xMax) / 2 * canvas.width; // Center of top edge
+    const y = box.yMin * canvas.height; // Top edge
+    const arrowLength = Math.min(canvas.height * 0.1, 30); // Arrow length relative to canvas height, max 30px
+    const arrowTipY = Math.max(0, y - arrowLength); // Ensure arrow tip doesn't go above canvas
+    const headLength = Math.min(arrowLength * 0.4, 8); // Arrow head size, max 8px
+
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x, arrowTipY);
+
+    // Arrowhead
+    context.lineTo(x - headLength / 2, arrowTipY + headLength);
+    context.moveTo(x, arrowTipY);
+    context.lineTo(x + headLength / 2, arrowTipY + headLength);
+
+    context.strokeStyle = 'red'; // Arrow color
+    context.lineWidth = 2; // Thinner arrow line
+    context.stroke();
+    console.log(`Drew arrow at (${x.toFixed(0)}, ${y.toFixed(0)}) -> (${x.toFixed(0)}, ${arrowTipY.toFixed(0)})`);
+  };
 
 
   return (
@@ -652,7 +673,7 @@ export default function Home() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       {result.snapshots.map((snapshot: Snapshot, index: number) => (
                         <Card key={index} className="flex flex-col items-center border rounded-lg p-3 bg-background/70 dark:bg-muted/40 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
-                          {/* Container for Image and Bounding Box */}
+                          {/* Container for Image and Arrow Canvas */}
                           <div className="w-full h-48 mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
                             {isValidAndNotPlaceholder(snapshot.dataUri) ? (
                               <>
@@ -665,9 +686,30 @@ export default function Home() {
                                   data-ai-hint="person identified snapshot"
                                   unoptimized // Add if base64 strings cause issues with Next/Image optimization
                                 />
-                                {/* Render Bounding Box if available */}
+                                {/* Render Arrow using Canvas if bounding box is available */}
                                 {snapshot.boundingBox && (
-                                    <div style={getBoundingBoxStyle(snapshot.boundingBox)}></div>
+                                  <canvas
+                                    // Set width/height to ensure drawing context has dimensions
+                                    // They will be scaled by CSS
+                                    width={300} // Example base width
+                                    height={200} // Example base height
+                                    style={{
+                                      position: 'absolute',
+                                      left: 0,
+                                      top: 0,
+                                      width: '100%',
+                                      height: '100%',
+                                      pointerEvents: 'none', // Allow clicks through the canvas
+                                    }}
+                                    ref={(canvasElement) => {
+                                      if (canvasElement && snapshot.boundingBox) {
+                                        // Call drawing function when canvas element is ready
+                                        // Check if the canvas already has the desired dimensions from the image load, if not, maybe wait?
+                                        // For simplicity, assuming the fixed width/height is okay for now
+                                        drawArrowOnCanvas(canvasElement, snapshot.boundingBox);
+                                      }
+                                    }}
+                                  />
                                 )}
                                </>
                             ) : (
@@ -684,10 +726,10 @@ export default function Home() {
                                      <Clock className="w-3.5 h-3.5" />
                                      {snapshot.timestamp.toFixed(2)}s
                                 </span>
-                                 {/* Indicate if bounding box is present */}
-                                 <span className={`flex items-center gap-1 ${snapshot.boundingBox ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground/60'}`}>
-                                      <Square className="w-3 h-3" />
-                                      <span className="text-xs">{snapshot.boundingBox ? 'Box' : 'No Box'}</span>
+                                 {/* Indicate if localization data (box/arrow) is present */}
+                                 <span className={`flex items-center gap-1 ${snapshot.boundingBox ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground/60'}`}>
+                                      {snapshot.boundingBox ? <ArrowUp className="w-3 h-3" /> : <Square className="w-3 h-3 opacity-50" />}
+                                      <span className="text-xs">{snapshot.boundingBox ? 'Located' : 'No Loc'}</span>
                                  </span>
                                 <Badge variant={getSnapshotBadgeVariant(snapshot.generationStatus)} className="text-xs px-1.5 py-0.5">
                                   {getSnapshotStatusText(snapshot.generationStatus)}
@@ -720,3 +762,4 @@ export default function Home() {
     </>
   );
 }
+
