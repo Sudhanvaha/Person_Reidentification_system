@@ -473,7 +473,7 @@ export default function Home() {
   }
 
   // Helper to draw arrow on canvas
-  // Modified to draw a downward arrow towards the center of the box
+  // Modified to draw a downward arrow towards the *center* of the box
   const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox, imageElement?: HTMLImageElement | null) => {
     const context = canvas.getContext('2d');
 
@@ -507,35 +507,39 @@ export default function Home() {
     // Clear previous drawings if reusing canvas
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Calculate arrow target point (center of the bounding box) based on effective dimensions
+    // --- Arrow Calculation ---
+    // Target point: Center of the bounding box (approximating the face/center mass)
     const targetX = offsetX + (box.xMin + box.xMax) / 2 * effectiveWidth;
     const targetY = offsetY + (box.yMin + box.yMax) / 2 * effectiveHeight;
 
-    // Calculate arrow start point (above the target point)
-    const arrowLength = Math.min(effectiveHeight * 0.1, 30); // Arrow length relative to effective height, max 30px
-    const arrowStartY = Math.max(0, targetY - arrowLength * 1.5); // Start arrow further above the center point
+    // Arrow length relative to effective height, with min/max
+    const arrowLength = Math.max(15, Math.min(effectiveHeight * 0.1, 30));
+    const headLength = Math.min(arrowLength * 0.5, 10); // Arrow head size relative to length
 
-    // Ensure arrow doesn't start outside canvas bounds (though targetY should prevent this if box is valid)
-    const arrowTipY = Math.min(canvas.height, targetY - arrowLength * 0.2); // Tip slightly above center
+    // Start point: Positioned *above* the target center
+    const arrowStartY = Math.max(0, targetY - arrowLength * 1.5); // Start arrow a bit higher
 
-    const headLength = Math.min(arrowLength * 0.5, 10); // Arrow head size, max 10px
+    // End point (arrow tip): Slightly *above* the actual target center to avoid covering it
+    const arrowTipY = Math.max(arrowStartY + headLength, targetY - arrowLength * 0.2); // Ensure tip is below start and slightly above center
 
+    // --- Drawing ---
     context.beginPath();
-    context.moveTo(targetX, arrowStartY); // Start above
-    context.lineTo(targetX, arrowTipY); // Draw line down towards the target center
+    context.moveTo(targetX, arrowStartY); // Start line above target
+    context.lineTo(targetX, arrowTipY); // Draw line down towards target
 
-    // Arrowhead points down
+    // Arrowhead points down (towards targetY)
+    // Draw the arrowhead lines originating from the arrow tip (arrowTipY)
     context.moveTo(targetX, arrowTipY);
-    context.lineTo(targetX - headLength / 2, arrowTipY - headLength); // Point left-up
+    context.lineTo(targetX - headLength / 2, arrowTipY - headLength); // Point left-up from the tip
     context.moveTo(targetX, arrowTipY);
-    context.lineTo(targetX + headLength / 2, arrowTipY - headLength); // Point right-up
-
+    context.lineTo(targetX + headLength / 2, arrowTipY - headLength); // Point right-up from the tip
 
     context.strokeStyle = 'red'; // Arrow color
     context.lineWidth = 3; // Thicker arrow line
     context.stroke();
-    console.log(`Drew arrow from (${targetX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${targetX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting center.`);
+    console.log(`Drew arrow from (${targetX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${targetX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting center (${targetX.toFixed(0)}, ${targetY.toFixed(0)}).`);
   };
+
 
   // Use effect to redraw arrows when image dimensions are loaded or result changes
   useEffect(() => {
@@ -565,6 +569,15 @@ export default function Home() {
                       };
                       image.addEventListener('load', handleLoad);
                   }
+              } else {
+                 // If no bounding box, ensure the canvas is clear
+                 const canvas = snapshotCanvasRefs.current[index];
+                 if (canvas) {
+                    const context = canvas.getContext('2d');
+                    if (context) {
+                        context.clearRect(0, 0, canvas.width, canvas.height);
+                    }
+                 }
               }
           });
       }
