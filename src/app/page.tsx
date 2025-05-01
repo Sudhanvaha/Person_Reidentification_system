@@ -9,7 +9,7 @@ import { reIdentifyPerson } from "@/ai/flows/re-identify-person";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square, ArrowDown } from "lucide-react"; // Changed ArrowUp to ArrowDown
+import { CheckCircle, XCircle, Upload, Video, Loader2, Image as ImageIcon, AlertCircle, Clock, ImageOff, Camera, Film, Square, ArrowDown } from "lucide-react";
 import Image from "next/image";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
@@ -473,7 +473,7 @@ export default function Home() {
   }
 
   // Helper to draw arrow on canvas
-  // Modified to draw a downward arrow towards the *center* of the box
+  // Modified to draw a downward arrow pointing towards the upper-center of the box
   const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox, imageElement?: HTMLImageElement | null) => {
     const context = canvas.getContext('2d');
 
@@ -508,24 +508,26 @@ export default function Home() {
     context.clearRect(0, 0, canvas.width, canvas.height);
 
     // --- Arrow Calculation ---
-    // Target point: Center of the bounding box (approximating the face/center mass)
+    // Target point: Upper-center of the bounding box (approximating the face area)
+    // Aiming slightly below the top edge and horizontally centered within the box.
     const targetX = offsetX + (box.xMin + box.xMax) / 2 * effectiveWidth;
-    const targetY = offsetY + (box.yMin + box.yMax) / 2 * effectiveHeight;
+    // Target a point slightly down from the top edge (e.g., 20% of box height)
+    const targetY = offsetY + (box.yMin + (box.yMax - box.yMin) * 0.2) * effectiveHeight;
 
     // Arrow length relative to effective height, with min/max
     const arrowLength = Math.max(15, Math.min(effectiveHeight * 0.1, 30));
     const headLength = Math.min(arrowLength * 0.5, 10); // Arrow head size relative to length
 
-    // Start point: Positioned *above* the target center
-    const arrowStartY = Math.max(0, targetY - arrowLength * 1.5); // Start arrow a bit higher
+    // Start point: Positioned *above* the target point
+    const arrowStartY = Math.max(0, targetY - arrowLength); // Start arrow above the target Y
 
-    // End point (arrow tip): Slightly *above* the actual target center to avoid covering it
-    const arrowTipY = Math.max(arrowStartY + headLength, targetY - arrowLength * 0.2); // Ensure tip is below start and slightly above center
+    // End point (arrow tip): Exactly at the target point
+    const arrowTipY = targetY;
 
     // --- Drawing ---
     context.beginPath();
     context.moveTo(targetX, arrowStartY); // Start line above target
-    context.lineTo(targetX, arrowTipY); // Draw line down towards target
+    context.lineTo(targetX, arrowTipY); // Draw line down to the target point
 
     // Arrowhead points down (towards targetY)
     // Draw the arrowhead lines originating from the arrow tip (arrowTipY)
@@ -537,7 +539,7 @@ export default function Home() {
     context.strokeStyle = 'red'; // Arrow color
     context.lineWidth = 3; // Thicker arrow line
     context.stroke();
-    console.log(`Drew arrow from (${targetX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${targetX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting center (${targetX.toFixed(0)}, ${targetY.toFixed(0)}).`);
+    console.log(`Drew arrow from (${targetX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${targetX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting upper-center point.`);
   };
 
 
@@ -774,9 +776,13 @@ export default function Home() {
                                        const canvas = snapshotCanvasRefs.current[index];
                                        if (canvas && snapshot.boundingBox) {
                                            // Optionally resize canvas here if needed based on img dimensions
-                                           // canvas.width = img.offsetWidth; // Use offsetWidth/Height if available
-                                           // canvas.height = img.offsetHeight;
-                                           drawArrowOnCanvas(canvas, snapshot.boundingBox, img);
+                                           // This logic assumes the canvas might not have the correct size initially
+                                           const container = canvas.parentElement;
+                                           if (container) {
+                                               canvas.width = container.offsetWidth;
+                                               canvas.height = container.offsetHeight;
+                                               drawArrowOnCanvas(canvas, snapshot.boundingBox, img);
+                                           }
                                        }
                                    }}
                                 />
@@ -784,10 +790,9 @@ export default function Home() {
                                 {snapshot.boundingBox && (
                                   <canvas
                                      ref={el => snapshotCanvasRefs.current[index] = el} // Store canvas ref
-                                    // Set intrinsic size, CSS will scale it via 'absolute' and width/height 100%
-                                    // Set a reasonable base size; it will be cleared and redrawn based on container/image
-                                     width={300} // Base width, adjust if needed
-                                     height={200} // Base height, adjust if needed
+                                    // Set intrinsic size based on parent container; it will be cleared and redrawn based on container/image
+                                     width={300} // Base width, will be overwritten by onLoad if possible
+                                     height={200} // Base height, will be overwritten by onLoad if possible
                                     style={{
                                       position: 'absolute',
                                       left: 0,
