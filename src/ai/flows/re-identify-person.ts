@@ -32,6 +32,7 @@ const BoundingBoxSchema = z.object({
     xMax: z.number().min(0).max(1).describe('Normalized X coordinate of the bottom-right corner (0-1).'),
     yMax: z.number().min(0).max(1).describe('Normalized Y coordinate of the bottom-right corner (0-1).'),
 }).describe('Normalized bounding box coordinates (0.0 to 1.0) of the identified person.');
+export type BoundingBox = z.infer<typeof BoundingBoxSchema>; // Export BoundingBox type
 
 // Combine timestamp and optional bounding box
 const IdentificationResultSchema = z.object({
@@ -104,7 +105,7 @@ const reIdentifyPersonPrompt = ai.definePrompt({
   3.  'reason': A brief explanation justifying your conclusion (e.g., "Person matching the photo's appearance and clothing seen entering the frame at ~3s" or "No individual matching the photo's description was observed in the video.").
   4.  'identifications': If and only if you determine the person IS present ('isPresent' is true), provide an array of up to 3 distinct 'IdentificationResult' objects. Each object should contain:
         a. 'timestamp': An approximate timestamp (in seconds, as a number, e.g., 2.5) where the person is visible. Ensure timestamps are within the video duration (0 to {{videoDuration}} seconds).
-        b. 'boundingBox': (Optional) If the person is clearly identifiable at that timestamp, provide a 'boundingBox' object with normalized coordinates (0.0 to 1.0) for the person's location in the frame: { "xMin": <number>, "yMin": <number>, "xMax": <number>, "yMax": <number> }. If a bounding box cannot be reliably determined, omit this field or set it to null.
+        b. 'boundingBox': (Optional) If the person is clearly identifiable at that timestamp, provide a 'boundingBox' object with normalized coordinates (0.0 to 1.0) for the person's location in the frame: { "xMin": <number>, "yMin": <number>, "xMax": <number>, "yMax": <number> }. Make sure xMin < xMax and yMin < yMax. If a bounding box cannot be reliably determined, omit this field or set it to null.
      If the person is not present, return an empty array 'identifications: []' or omit the field.
 
   Example Output (Person Found with Bounding Box):
@@ -182,21 +183,23 @@ const reIdentifyPersonFlow = ai.defineFlow<
         llmOutput.identifications = llmOutput.identifications
             .filter(id => id.timestamp >= 0 && id.timestamp <= videoDuration) // Ensure timestamp is valid
             .map(id => {
-                // Ensure bounding box values are within 0-1 if present
+                // Ensure bounding box values are within 0-1 and valid if present
                 if (id.boundingBox) {
                     const bb = id.boundingBox;
                     if (bb.xMin < 0 || bb.xMin > 1 || bb.yMin < 0 || bb.yMin > 1 ||
                         bb.xMax < 0 || bb.xMax > 1 || bb.yMax < 0 || bb.yMax > 1 ||
                         bb.xMin >= bb.xMax || bb.yMin >= bb.yMax) {
-                        console.warn(`[reIdentifyPersonFlow] Invalid bounding box received for timestamp ${id.timestamp}, removing it.`);
-                        return { ...id, boundingBox: undefined }; // Remove invalid box
+                        console.warn(`[reIdentifyPersonFlow] Invalid bounding box received for timestamp ${id.timestamp}, removing it. Box:`, bb);
+                        // Return identification without the invalid bounding box
+                        return { timestamp: id.timestamp, boundingBox: undefined };
                     }
                 }
+                // Return the identification as is (either with valid box or no box)
                 return id;
             })
             .sort((a, b) => a.timestamp - b.timestamp); // Sort by timestamp
 
-        console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, Identifications=`, llmOutput.identifications);
+        console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, Validated Identifications=`, llmOutput.identifications);
     } else {
         console.log(`[reIdentifyPersonFlow] LLM Result: isPresent=${llmOutput.isPresent}, Confidence=${llmOutput.confidence?.toFixed(2)}, Reason=${llmOutput.reason}, No Identifications Provided.`);
         llmOutput.identifications = []; // Ensure identifications array exists even if empty
@@ -226,5 +229,3 @@ export async function reIdentifyPerson(input: ReIdentifyPersonInput): Promise<Re
         };
   }
 }
-
-    
