@@ -472,8 +472,8 @@ export default function Home() {
       }
   }
 
-  // Helper to draw arrow on canvas
-  const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox, imageElement?: HTMLImageElement | null) => {
+ // Helper to draw arrow on canvas, now targeting face area
+ const drawArrowOnCanvas = (canvas: HTMLCanvasElement, box: BoundingBox, imageElement?: HTMLImageElement | null) => {
     const context = canvas.getContext('2d');
 
     // Determine the effective dimensions to use for scaling coordinates
@@ -507,18 +507,18 @@ export default function Home() {
     context.clearRect(0, 0, canvas.width, canvas.height);
 
     // --- Arrow Calculation ---
-    // Target point: Aim towards the estimated upper chest/neck area, slightly below the top-center of the box.
-    // This is a heuristic assuming a typical upper body pose.
+    // Target point: Aim towards the estimated center of the face area.
+    // Heuristic: Roughly 1/8th down from the top and centered horizontally within the box.
     const targetX = offsetX + ((box.xMin + box.xMax) / 2) * effectiveWidth;
-    // Target a point roughly 1/4 down the height of the bounding box.
-    const targetY = offsetY + (box.yMin + (box.yMax - box.yMin) * 0.25) * effectiveHeight;
+    // Target a point roughly 1/8th down the height of the bounding box.
+    const targetY = offsetY + (box.yMin + (box.yMax - box.yMin) * 0.125) * effectiveHeight;
 
     // Arrow length relative to effective height, with min/max
-    const arrowLength = Math.max(20, Math.min(effectiveHeight * 0.15, 40)); // Slightly longer arrow
-    const headLength = Math.min(arrowLength * 0.4, 12); // Arrow head size relative to length
+    const arrowLength = Math.max(20, Math.min(effectiveHeight * 0.1, 30)); // Shorter arrow, adjust as needed
+    const headLength = Math.min(arrowLength * 0.5, 10); // Arrow head size
 
     // Start point: Positioned *above* the target point
-    const arrowStartY = Math.max(offsetY, targetY - arrowLength); // Start arrow above the target Y, ensuring it's within image bounds if possible
+    const arrowStartY = Math.max(offsetY, targetY - arrowLength); // Start arrow above the target Y
 
     // End point (arrow tip): Exactly at the target point
     const arrowTipX = targetX;
@@ -531,15 +531,15 @@ export default function Home() {
 
     // Arrowhead points down (towards targetY)
     context.moveTo(arrowTipX, arrowTipY); // Move to tip
-    context.lineTo(arrowTipX - headLength / 2, arrowTipY - headLength * 0.8); // Point left-up from the tip (adjust angle)
+    context.lineTo(arrowTipX - headLength / 2, arrowTipY - headLength * 0.8); // Point left-up from the tip
     context.moveTo(arrowTipX, arrowTipY); // Move back to tip
-    context.lineTo(arrowTipX + headLength / 2, arrowTipY - headLength * 0.8); // Point right-up from the tip (adjust angle)
+    context.lineTo(arrowTipX + headLength / 2, arrowTipY - headLength * 0.8); // Point right-up from the tip
 
     context.strokeStyle = 'rgba(255, 0, 0, 0.9)'; // Semi-transparent Red arrow color
     context.lineWidth = 3; // Thicker arrow line
     context.lineCap = 'round'; // Rounded line ends
     context.stroke();
-    console.log(`Drew arrow from (${arrowTipX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${arrowTipX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting estimated upper body.`);
+    console.log(`Drew arrow from (${arrowTipX.toFixed(0)}, ${arrowStartY.toFixed(0)}) -> (${arrowTipX.toFixed(0)}, ${arrowTipY.toFixed(0)}) targeting estimated face area.`);
   };
 
 
@@ -547,6 +547,7 @@ export default function Home() {
   useEffect(() => {
       if (result?.snapshots) {
           result.snapshots.forEach((snapshot, index) => {
+              // Only attempt to draw if a bounding box exists for this snapshot
               if (snapshot.boundingBox) {
                   const canvas = snapshotCanvasRefs.current[index];
                   const image = snapshotImageRefs.current[index];
@@ -582,10 +583,6 @@ export default function Home() {
                                 drawArrowOnCanvas(canvas, snapshot.boundingBox, image);
                             } else {
                                  console.warn("Canvas parent container not found for sizing.");
-                                // Fallback to image natural size? Might be too large.
-                                // canvas.width = image.naturalWidth;
-                                // canvas.height = image.naturalHeight;
-                                // drawArrowOnCanvas(canvas, snapshot.boundingBox, image);
                             }
                           } else {
                               console.warn(`Skipping arrow draw for index ${index}: canvas or image refs missing, or image not loaded.`);
@@ -616,12 +613,16 @@ export default function Home() {
                        }
                   }
               } else {
-                 // If no bounding box, ensure the canvas is clear
+                 // If no bounding box, ensure the corresponding canvas is clear
                  const canvas = snapshotCanvasRefs.current[index];
                  if (canvas) {
                     const context = canvas.getContext('2d');
                     if (context) {
+                        // Set width/height before clearing if they aren't set by the image load logic
+                        if(canvas.width === 0 && canvas.parentElement) canvas.width = canvas.parentElement.offsetWidth;
+                        if(canvas.height === 0 && canvas.parentElement) canvas.height = canvas.parentElement.offsetHeight;
                         context.clearRect(0, 0, canvas.width, canvas.height);
+                         console.log(`Cleared canvas for index ${index} as no bounding box was provided.`);
                     }
                  }
               }
@@ -634,7 +635,7 @@ export default function Home() {
     <>
      <Toaster /> {/* Add Toaster component here */}
       <div className="container mx-auto flex flex-col items-center justify-center min-h-screen py-8 px-4">
-        <h1 className="text-4xl font-bold mb-8 text-center text-primary">Person Re-Identification</h1>
+        <h1 className="text-4xl font-bold mb-8 text-center text-primary">Person Re-Identification system</h1>
         <p className="text-muted-foreground mb-6 text-center max-w-2xl">Upload a clear photo of a person and a video (MP4, MOV, WEBM, etc., ideally under 100MB and less than a minute long) to see if the person appears in the video.</p>
 
         {/* Hidden Canvas for frame extraction */}
@@ -800,8 +801,7 @@ export default function Home() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       {result.snapshots.map((snapshot: Snapshot, index: number) => (
                         <Card key={index} className="flex flex-col items-center border rounded-lg p-3 bg-background/70 dark:bg-muted/40 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
-                          {/* Container for Image and Arrow Canvas */}
-                           {/* Set explicit size for the container to match image aspect ratio */}
+                           {/* Container for Image and Arrow Canvas */}
                            <div className="w-full aspect-video mb-3 relative bg-muted/50 dark:bg-muted/30 rounded-md border flex items-center justify-center overflow-hidden">
                             {isValidAndNotPlaceholder(snapshot.dataUri) ? (
                               <>
@@ -814,20 +814,22 @@ export default function Home() {
                                   className="transition-transform duration-300 ease-in-out hover:scale-105"
                                   data-ai-hint="person identified snapshot"
                                   unoptimized // Add if base64 strings cause issues with Next/Image optimization
+                                  // Add onLoad/onError for debugging image loading issues
+                                   onLoad={() => console.log(`Image ${index} loaded successfully.`)}
+                                   onError={() => console.error(`Image ${index} failed to load.`)}
                                 />
                                 {/* Render Arrow using Canvas if bounding box is available */}
                                 {snapshot.boundingBox && (
                                   <canvas
                                      ref={el => snapshotCanvasRefs.current[index] = el} // Store canvas ref
-                                    // Intrinsic size will be set in useEffect based on container/image aspect ratio
                                      style={{
                                       position: 'absolute',
                                       left: '50%', // Center horizontally
                                       top: '50%', // Center vertically
                                       transform: 'translate(-50%, -50%)', // Fine-tune centering
-                                      maxWidth: '100%', // Ensure canvas doesn't overflow container width
-                                      maxHeight: '100%', // Ensure canvas doesn't overflow container height
-                                      pointerEvents: 'none', // Allow clicks through the canvas
+                                      maxWidth: '100%',
+                                      maxHeight: '100%',
+                                      pointerEvents: 'none',
                                     }}
                                   />
                                 )}
@@ -882,4 +884,3 @@ export default function Home() {
     </>
   );
 }
-
