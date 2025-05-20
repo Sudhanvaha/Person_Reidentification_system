@@ -14,6 +14,5 @@
 - Clean and modern layout with a focus on image display.
 - Simple, recognizable icons for upload and navigation.
 
-## Original User Request:
-like i will provide both photo and video,you need to detect the person in photo to video and tell whether he is there is not
+
   
